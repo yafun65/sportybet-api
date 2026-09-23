@@ -22,10 +22,11 @@ app.get("/", (req, res) => {
 
 
 // =====================================================
-// LOAD AN EXISTING SPORTYBET BOOKING CODE
+// LOAD EXISTING SPORTYBET BOOKING CODE
 // =====================================================
 
 app.get("/booking/:code", async (req, res) => {
+
   const code = String(req.params.code || "")
     .trim()
     .toUpperCase();
@@ -40,8 +41,10 @@ app.get("/booking/:code", async (req, res) => {
     `${SPORTYBET_BASE}/api/ng/orders/share/${encodeURIComponent(code)}`;
 
   try {
+
     const response = await fetch(url, {
       method: "GET",
+
       headers: {
         "Accept": "application/json",
         "Current-Country": "NG"
@@ -50,12 +53,15 @@ app.get("/booking/:code", async (req, res) => {
 
     const raw = await response.text();
 
-    console.log("SportyBet status:", response.status);
-    console.log("Response length:", raw.length);
+    console.log(
+      "SportyBet status:",
+      response.status
+    );
 
     if (!response.ok) {
       return res.status(502).json({
-        error: `SportyBet returned HTTP ${response.status}.`
+        error:
+          `SportyBet returned HTTP ${response.status}.`
       });
     }
 
@@ -65,7 +71,8 @@ app.get("/booking/:code", async (req, res) => {
       data = JSON.parse(raw);
     } catch {
       return res.status(502).json({
-        error: "SportyBet returned a non-JSON response."
+        error:
+          "SportyBet returned a non-JSON response."
       });
     }
 
@@ -73,38 +80,49 @@ app.get("/booking/:code", async (req, res) => {
 
     if (!booking) {
       return res.status(404).json({
-        error: "No booking data was returned."
+        error:
+          "No booking data was returned."
       });
     }
 
-    const events = Array.isArray(booking.outcomes)
-      ? booking.outcomes
-      : [];
+    const events =
+      Array.isArray(booking.outcomes)
+        ? booking.outcomes
+        : [];
 
     const selections = [];
 
     for (const event of events) {
-      const markets = Array.isArray(event.markets)
-        ? event.markets
-        : [];
 
-      for (const market of markets) {
-        const marketOutcomes = Array.isArray(market.outcomes)
-          ? market.outcomes
+      const markets =
+        Array.isArray(event.markets)
+          ? event.markets
           : [];
 
+      for (const market of markets) {
+
+        const marketOutcomes =
+          Array.isArray(market.outcomes)
+            ? market.outcomes
+            : [];
+
         for (const outcome of marketOutcomes) {
+
           selections.push({
+
             event:
-              event.homeTeamName && event.awayTeamName
+              event.homeTeamName &&
+              event.awayTeamName
                 ? `${event.homeTeamName} vs ${event.awayTeamName}`
                 : "Unknown match",
 
             market:
-              market.desc || "Unknown market",
+              market.desc ||
+              "Unknown market",
 
             pick:
-              outcome.desc || "Unknown pick",
+              outcome.desc ||
+              "Unknown pick",
 
             odds:
               outcome.odds !== undefined
@@ -112,22 +130,28 @@ app.get("/booking/:code", async (req, res) => {
                 : null,
 
             eventId:
-              event.eventId || null,
+              event.eventId ||
+              null,
 
             gameId:
-              event.gameId || null,
+              event.gameId ||
+              null,
 
             marketId:
-              market.id || null,
+              market.id ||
+              null,
 
             specifier:
-              market.specifier || null,
+              market.specifier ||
+              null,
 
             outcomeId:
-              outcome.id || null,
+              outcome.id ||
+              null,
 
             startTime:
-              event.estimateStartTime || null
+              event.estimateStartTime ||
+              null
           });
         }
       }
@@ -141,30 +165,40 @@ app.get("/booking/:code", async (req, res) => {
     }
 
     return res.json({
+
       shareCode:
-        booking.shareCode || code,
+        booking.shareCode ||
+        code,
 
       shareURL:
-        booking.shareURL || null,
+        booking.shareURL ||
+        null,
 
       deadline:
-        booking.deadline || null,
+        booking.deadline ||
+        null,
 
       selections
+
     });
 
   } catch (error) {
-    console.error("Booking error:", error);
+
+    console.error(
+      "Booking error:",
+      error
+    );
 
     return res.status(500).json({
-      error: "Unable to connect to SportyBet."
+      error:
+        "Unable to connect to SportyBet."
     });
   }
 });
 
 
 // =====================================================
-// CREATE A NEW SPORTYBET BOOKING CODE
+// CREATE SPORTYBET BOOKING CODE
 // =====================================================
 
 app.post("/create-booking", async (req, res) => {
@@ -176,14 +210,19 @@ app.post("/create-booking", async (req, res) => {
     selections.length === 0 ||
     selections.length > 100
   ) {
+
     return res.status(400).json({
-      error: "Invalid selections."
+      error:
+        "Invalid selections."
     });
   }
 
 
-  // Make sure every selection has the identifiers
-  // required to create a real SportyBet booking.
+  // ---------------------------------------------------
+  // Validate SportyBet IDs
+  // ---------------------------------------------------
+
+  const sportBetSelections = [];
 
   for (const selection of selections) {
 
@@ -192,56 +231,80 @@ app.post("/create-booking", async (req, res) => {
       !selection.marketId ||
       !selection.outcomeId
     ) {
+
       return res.status(400).json({
+
         error:
-          "One or more selections are missing SportyBet IDs."
+          `Missing SportyBet IDs for ${
+            selection.event || "unknown event"
+          }.`
       });
+
     }
-  }
-
-
-  // Convert our selection format into the structure
-  // expected by the SportyBet booking endpoint.
-
-  const outcomes = selections.map((selection) => {
 
     const item = {
-      eventId: String(selection.eventId),
-      marketId: String(selection.marketId),
-      outcomeId: String(selection.outcomeId)
+
+      eventId:
+        String(selection.eventId),
+
+      marketId:
+        String(selection.marketId),
+
+      outcomeId:
+        String(selection.outcomeId)
+
     };
 
     if (selection.specifier) {
-      item.specifier = String(selection.specifier);
+
+      item.specifier =
+        String(selection.specifier);
+
     }
 
-    return item;
-  });
+    sportBetSelections.push(item);
+  }
 
 
-  const url =
-    `${SPORTYBET_BASE}/api/ng/orders/share`;
-
+  // ---------------------------------------------------
+  // Send booking request to SportyBet
+  // ---------------------------------------------------
 
   try {
 
-    const response = await fetch(url, {
+    const response = await fetch(
+      `${SPORTYBET_BASE}/api/ng/orders/share`,
+      {
 
-      method: "POST",
+        method: "POST",
 
-      headers: {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "Current-Country": "NG"
-      },
+        headers: {
 
-      body: JSON.stringify({
-        outcomes
-      })
-    });
+          "Accept":
+            "application/json",
+
+          "Content-Type":
+            "application/json",
+
+          "Current-Country":
+            "NG"
+
+        },
+
+        body: JSON.stringify({
+
+          selections:
+            sportBetSelections
+
+        })
+
+      }
+    );
 
 
-    const raw = await response.text();
+    const raw =
+      await response.text();
+
 
     console.log(
       "SportyBet booking status:",
@@ -257,12 +320,17 @@ app.post("/create-booking", async (req, res) => {
     let data;
 
     try {
-      data = JSON.parse(raw);
+
+      data =
+        JSON.parse(raw);
+
     } catch {
 
       return res.status(502).json({
+
         error:
           "SportyBet returned a non-JSON booking response."
+
       });
 
     }
@@ -271,17 +339,16 @@ app.post("/create-booking", async (req, res) => {
     if (!response.ok) {
 
       return res.status(502).json({
+
         error:
           data?.message ||
           data?.error ||
           `SportyBet returned HTTP ${response.status}.`
+
       });
 
     }
 
-
-    // SportyBet may place the result under different
-    // response properties depending on the API version.
 
     const result =
       data?.data ||
@@ -305,9 +372,10 @@ app.post("/create-booking", async (req, res) => {
     if (!shareCode) {
 
       return res.status(502).json({
+
         error:
-          "SportyBet responded successfully, but no booking code was returned.",
-        response: data
+          "SportyBet responded, but no booking code was returned."
+
       });
 
     }
@@ -315,16 +383,14 @@ app.post("/create-booking", async (req, res) => {
 
     return res.status(200).json({
 
-      success: true,
+      success:
+        true,
 
       shareCode,
 
-      shareURL,
-
-      selections
+      shareURL
 
     });
-
 
   } catch (error) {
 
@@ -334,8 +400,10 @@ app.post("/create-booking", async (req, res) => {
     );
 
     return res.status(500).json({
+
       error:
         "Unable to create the SportyBet booking."
+
     });
 
   }
@@ -347,10 +415,14 @@ app.post("/create-booking", async (req, res) => {
 // START SERVER
 // =====================================================
 
-app.listen(PORT, "0.0.0.0", () => {
+app.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
 
-  console.log(
-    `SportyBet API running on port ${PORT}`
-  );
+    console.log(
+      `SportyBet API running on port ${PORT}`
+    );
 
-});
+  }
+);
