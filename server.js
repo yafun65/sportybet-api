@@ -79,29 +79,14 @@ app.get("/booking/:code", async (req, res) => {
       ? booking.outcomes
       : [];
 
-    const selections = outcomes.map((item) => ({
-      event:
-        item.homeTeamName && item.awayTeamName
-          ? `${item.homeTeamName} vs ${item.awayTeamName}`
-          : item.eventName || "Unknown match",
+  const firstOutcome = outcomes[0];
 
-      market:
-        item.marketDesc ||
-        item.marketName ||
-        "Unknown market",
-
-      pick:
-        item.selectedOutcome ||
-        item.selectedOutcomeName ||
-        item.outcomeName ||
-        item.outcome ||
-        "Unknown pick",
-
-      odds:
-        item.odds !== undefined
-          ? Number(item.odds)
-          : null
-    }));
+return res.json({
+  debug: true,
+  shareCode: booking.shareCode || code,
+  outcomeKeys: Object.keys(firstOutcome || {}),
+  firstOutcome: firstOutcome
+});
 
     return res.json({
       shareCode:
