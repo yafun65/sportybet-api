@@ -6,8 +6,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 
-const SPORTYBET_BASE =
-  "https://www.sportybet.com";
+const SPORTYBET_BASE = "https://www.sportybet.com";
 
 app.get("/", (req, res) => {
   res.json({
@@ -41,15 +40,8 @@ app.get("/booking/:code", async (req, res) => {
 
     const raw = await response.text();
 
-    console.log(
-      "SportyBet status:",
-      response.status
-    );
-
-    console.log(
-      "Response length:",
-      raw.length
-    );
+    console.log("SportyBet status:", response.status);
+    console.log("Response length:", raw.length);
 
     if (!response.ok) {
       return res.status(502).json({
@@ -75,18 +67,59 @@ app.get("/booking/:code", async (req, res) => {
       });
     }
 
-    const outcomes = Array.isArray(booking.outcomes)
+    const events = Array.isArray(booking.outcomes)
       ? booking.outcomes
       : [];
 
-  const firstOutcome = outcomes[0];
+    const selections = [];
 
-return res.json({
-  debug: true,
-  shareCode: booking.shareCode || code,
-  outcomeKeys: Object.keys(firstOutcome || {}),
-  firstOutcome: firstOutcome
-});
+    for (const event of events) {
+      const markets = Array.isArray(event.markets)
+        ? event.markets
+        : [];
+
+      for (const market of markets) {
+        const marketOutcomes = Array.isArray(market.outcomes)
+          ? market.outcomes
+          : [];
+
+        for (const outcome of marketOutcomes) {
+          selections.push({
+            event:
+              event.homeTeamName && event.awayTeamName
+                ? `${event.homeTeamName} vs ${event.awayTeamName}`
+                : "Unknown match",
+
+            market:
+              market.desc || "Unknown market",
+
+            pick:
+              outcome.desc || "Unknown pick",
+
+            odds:
+              outcome.odds !== undefined
+                ? Number(outcome.odds)
+                : null,
+
+            eventId:
+              event.eventId || null,
+
+            gameId:
+              event.gameId || null,
+
+            startTime:
+              event.estimateStartTime || null
+          });
+        }
+      }
+    }
+
+    if (selections.length === 0) {
+      return res.status(404).json({
+        error:
+          "The booking was found, but no readable selections were found."
+      });
+    }
 
     return res.json({
       shareCode:
@@ -102,7 +135,7 @@ return res.json({
     });
 
   } catch (error) {
-    console.error(error);
+    console.error("API error:", error);
 
     return res.status(500).json({
       error: "Unable to connect to SportyBet."
