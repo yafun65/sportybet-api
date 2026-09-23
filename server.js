@@ -8,12 +8,22 @@ const PORT = process.env.PORT || 10000;
 
 const SPORTYBET_BASE = "https://www.sportybet.com";
 
+
+// =====================================================
+// HOME / HEALTH CHECK
+// =====================================================
+
 app.get("/", (req, res) => {
   res.json({
     status: "online",
     service: "SportyBet Slip Optimizer API"
   });
 });
+
+
+// =====================================================
+// LOAD AN EXISTING SPORTYBET BOOKING CODE
+// =====================================================
 
 app.get("/booking/:code", async (req, res) => {
   const code = String(req.params.code || "")
@@ -107,6 +117,15 @@ app.get("/booking/:code", async (req, res) => {
             gameId:
               event.gameId || null,
 
+            marketId:
+              market.id || null,
+
+            specifier:
+              market.specifier || null,
+
+            outcomeId:
+              outcome.id || null,
+
             startTime:
               event.estimateStartTime || null
           });
@@ -135,7 +154,7 @@ app.get("/booking/:code", async (req, res) => {
     });
 
   } catch (error) {
-    console.error("API error:", error);
+    console.error("Booking error:", error);
 
     return res.status(500).json({
       error: "Unable to connect to SportyBet."
@@ -143,8 +162,195 @@ app.get("/booking/:code", async (req, res) => {
   }
 });
 
+
+// =====================================================
+// CREATE A NEW SPORTYBET BOOKING CODE
+// =====================================================
+
+app.post("/create-booking", async (req, res) => {
+
+  const selections = req.body?.selections;
+
+  if (
+    !Array.isArray(selections) ||
+    selections.length === 0 ||
+    selections.length > 100
+  ) {
+    return res.status(400).json({
+      error: "Invalid selections."
+    });
+  }
+
+
+  // Make sure every selection has the identifiers
+  // required to create a real SportyBet booking.
+
+  for (const selection of selections) {
+
+    if (
+      !selection.eventId ||
+      !selection.marketId ||
+      !selection.outcomeId
+    ) {
+      return res.status(400).json({
+        error:
+          "One or more selections are missing SportyBet IDs."
+      });
+    }
+  }
+
+
+  // Convert our selection format into the structure
+  // expected by the SportyBet booking endpoint.
+
+  const outcomes = selections.map((selection) => {
+
+    const item = {
+      eventId: String(selection.eventId),
+      marketId: String(selection.marketId),
+      outcomeId: String(selection.outcomeId)
+    };
+
+    if (selection.specifier) {
+      item.specifier = String(selection.specifier);
+    }
+
+    return item;
+  });
+
+
+  const url =
+    `${SPORTYBET_BASE}/api/ng/orders/share`;
+
+
+  try {
+
+    const response = await fetch(url, {
+
+      method: "POST",
+
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Current-Country": "NG"
+      },
+
+      body: JSON.stringify({
+        outcomes
+      })
+    });
+
+
+    const raw = await response.text();
+
+    console.log(
+      "SportyBet booking status:",
+      response.status
+    );
+
+    console.log(
+      "SportyBet booking response:",
+      raw
+    );
+
+
+    let data;
+
+    try {
+      data = JSON.parse(raw);
+    } catch {
+
+      return res.status(502).json({
+        error:
+          "SportyBet returned a non-JSON booking response."
+      });
+
+    }
+
+
+    if (!response.ok) {
+
+      return res.status(502).json({
+        error:
+          data?.message ||
+          data?.error ||
+          `SportyBet returned HTTP ${response.status}.`
+      });
+
+    }
+
+
+    // SportyBet may place the result under different
+    // response properties depending on the API version.
+
+    const result =
+      data?.data ||
+      data?.result ||
+      data;
+
+
+    const shareCode =
+      result?.shareCode ||
+      result?.share_code ||
+      null;
+
+
+    const shareURL =
+      result?.shareURL ||
+      result?.shareUrl ||
+      result?.share_url ||
+      null;
+
+
+    if (!shareCode) {
+
+      return res.status(502).json({
+        error:
+          "SportyBet responded successfully, but no booking code was returned.",
+        response: data
+      });
+
+    }
+
+
+    return res.status(200).json({
+
+      success: true,
+
+      shareCode,
+
+      shareURL,
+
+      selections
+
+    });
+
+
+  } catch (error) {
+
+    console.error(
+      "Create booking error:",
+      error
+    );
+
+    return res.status(500).json({
+      error:
+        "Unable to create the SportyBet booking."
+    });
+
+  }
+
+});
+
+
+// =====================================================
+// START SERVER
+// =====================================================
+
 app.listen(PORT, "0.0.0.0", () => {
+
   console.log(
     `SportyBet API running on port ${PORT}`
   );
+
 });
