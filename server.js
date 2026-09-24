@@ -38,11 +38,34 @@ app.use(express.json());
 const PORT = process.env.PORT || 10000;
 
 const SPORTYBET_BASE = "https://www.sportybet.com";
-
 const SPORTYBET_REGION = "ng";
 
+// Keep the markets needed by the optimizer.
+// These are SportyBet market IDs, not fabricated IDs.
 const MARKET_IDS =
   "1,18,10,29,11,26,36,14,16,45,47,60,60100";
+
+// SportyBet allows pageSize up to 100 according to
+// the available API documentation.
+const PAGE_SIZE = 100;
+
+// Search several pages when an event is not on page 1.
+// This prevents us from assuming that page 1 contains
+// every fixture.
+const MAX_EVENT_SEARCH_PAGES = 10;
+
+// Small in-memory cache.
+// Render may restart, so this is only a performance cache,
+// never a source of truth.
+const CACHE_TTL_MS = 30000;
+
+let upcomingCache = {
+  data: null,
+  timestamp: 0,
+  pageNum: null
+};
+
+const pageCache = new Map();
 
 // =====================================================
 // SPORTYBET HEADERS
@@ -60,12 +83,12 @@ function sportyBetHeaders() {
 // BUILD SPORTYBET UPCOMING EVENTS URL
 // =====================================================
 
-function buildUpcomingEventsUrl() {
+function buildUpcomingEventsUrl(pageNum = 1) {
   const params = new URLSearchParams({
     sportId: "sr:sport:1",
     marketId: MARKET_IDS,
-    pageSize: "100",
-    pageNum: "1",
+    pageSize: String(PAGE_SIZE),
+    pageNum: String(pageNum),
     todayGames: "false",
     timeline: "720",
     _t: String(Date.now())
@@ -78,11 +101,29 @@ function buildUpcomingEventsUrl() {
 }
 
 // =====================================================
-// FETCH SPORTYBET UPCOMING EVENTS
+// FETCH ONE UPCOMING EVENTS PAGE
 // =====================================================
 
-async function fetchUpcomingEvents() {
-  const url = buildUpcomingEventsUrl();
+async function fetchUpcomingEventsPage(
+  pageNum = 1,
+  forceRefresh = false
+) {
+  const cached = pageCache.get(pageNum);
+
+  if (
+    !forceRefresh &&
+    cached &&
+    Date.now() - cached.timestamp < CACHE_TTL_MS
+  ) {
+    return cached.data;
+  }
+
+  const url =
+    buildUpcomingEventsUrl(pageNum);
+
+  console.log(
+    `Fetching SportyBet upcoming page ${pageNum}...`
+  );
 
   const response = await fetch(url, {
     method: "GET",
@@ -92,13 +133,13 @@ async function fetchUpcomingEvents() {
   const raw = await response.text();
 
   console.log(
-    "SportyBet upcoming events status:",
+    `SportyBet upcoming page ${pageNum} status:`,
     response.status
   );
 
   if (!response.ok) {
     throw new Error(
-      `SportyBet returned HTTP ${response.status}`
+      `SportyBet returned HTTP ${response.status} for page ${pageNum}.`
     );
   }
 
@@ -108,22 +149,43 @@ async function fetchUpcomingEvents() {
     data = JSON.parse(raw);
   } catch {
     throw new Error(
-      "SportyBet returned invalid JSON."
+      `SportyBet returned invalid JSON for page ${pageNum}.`
     );
   }
+
+  pageCache.set(pageNum, {
+    data,
+    timestamp: Date.now()
+  });
 
   return data;
 }
 
 // =====================================================
-// FIND EVENT INSIDE SPORTYBET RESPONSE
+// BACKWARD-COMPATIBLE FETCH FUNCTION
+// =====================================================
+
+async function fetchUpcomingEvents() {
+  return fetchUpcomingEventsPage(1);
+}
+
+// =====================================================
+// EXTRACT TOURNAMENTS
+// =====================================================
+
+function getTournaments(data) {
+  return Array.isArray(data?.data?.tournaments)
+    ? data.data.tournaments
+    : [];
+}
+
+// =====================================================
+// FIND EVENT INSIDE ONE SPORTYBET RESPONSE
 // =====================================================
 
 function findEventInData(data, eventId) {
   const tournaments =
-    Array.isArray(data?.data?.tournaments)
-      ? data.data.tournaments
-      : [];
+    getTournaments(data);
 
   for (const tournament of tournaments) {
     const events =
@@ -149,6 +211,180 @@ function findEventInData(data, eventId) {
 }
 
 // =====================================================
+// SEARCH MULTIPLE PAGES FOR ONE EVENT
+// =====================================================
+
+async function findEventAcrossPages(eventId) {
+  // -----------------------------------------------
+  // PAGE 1
+  // -----------------------------------------------
+
+  const firstPage =
+    await fetchUpcomingEventsPage(1);
+
+  let found =
+    findEventInData(
+      firstPage,
+      eventId
+    );
+
+  if (found) {
+    return {
+      ...found,
+      foundOnPage: 1,
+      pagesChecked: 1
+    };
+  }
+
+  // -----------------------------------------------
+  // DETERMINE TOTAL PAGES
+  // -----------------------------------------------
+
+  const totalNum =
+    Number(
+      firstPage?.data?.totalNum || 0
+    );
+
+  const calculatedPages =
+    totalNum > 0
+      ? Math.ceil(
+          totalNum / PAGE_SIZE
+        )
+      : MAX_EVENT_SEARCH_PAGES;
+
+  const pagesToCheck =
+    Math.min(
+      calculatedPages,
+      MAX_EVENT_SEARCH_PAGES
+    );
+
+  // -----------------------------------------------
+  // SEARCH REMAINING PAGES
+  // -----------------------------------------------
+
+  for (
+    let page = 2;
+    page <= pagesToCheck;
+    page++
+  ) {
+    const data =
+      await fetchUpcomingEventsPage(page);
+
+    found =
+      findEventInData(
+        data,
+        eventId
+      );
+
+    if (found) {
+      return {
+        ...found,
+        foundOnPage: page,
+        pagesChecked: page
+      };
+    }
+  }
+
+  return {
+    found: null,
+    foundOnPage: null,
+    pagesChecked: pagesToCheck
+  };
+}
+
+// =====================================================
+// SEARCH MANY EVENTS ACROSS PAGES
+// =====================================================
+
+async function findEventsAcrossPages(eventIds) {
+  const wanted =
+    new Set(
+      eventIds.map(String)
+    );
+
+  const foundMap =
+    new Map();
+
+  // -----------------------------------------------
+  // Search page by page.
+  // Once all events are found, stop immediately.
+  // -----------------------------------------------
+
+  const firstPage =
+    await fetchUpcomingEventsPage(1);
+
+  let pageData =
+    firstPage;
+
+  const totalNum =
+    Number(
+      firstPage?.data?.totalNum || 0
+    );
+
+  const calculatedPages =
+    totalNum > 0
+      ? Math.ceil(
+          totalNum / PAGE_SIZE
+        )
+      : MAX_EVENT_SEARCH_PAGES;
+
+  const pagesToCheck =
+    Math.min(
+      calculatedPages,
+      MAX_EVENT_SEARCH_PAGES
+    );
+
+  for (
+    let page = 1;
+    page <= pagesToCheck;
+    page++
+  ) {
+    if (page > 1) {
+      pageData =
+        await fetchUpcomingEventsPage(page);
+    }
+
+    const tournaments =
+      getTournaments(pageData);
+
+    for (const tournament of tournaments) {
+      const events =
+        Array.isArray(tournament?.events)
+          ? tournament.events
+          : [];
+
+      for (const event of events) {
+        const id =
+          String(event?.eventId || "");
+
+        if (
+          wanted.has(id) &&
+          !foundMap.has(id)
+        ) {
+          foundMap.set(id, {
+            event,
+            tournament,
+            foundOnPage: page
+          });
+        }
+      }
+    }
+
+    if (
+      foundMap.size === wanted.size
+    ) {
+      break;
+    }
+  }
+
+  return {
+    foundMap,
+    pagesChecked: pagesToCheck,
+    totalNum
+  };
+}
+
+// =====================================================
 // CLEAN EVENT + MARKETS
 // =====================================================
 
@@ -157,8 +393,11 @@ function cleanEventMarkets(found) {
     return null;
   }
 
-  const event = found.event;
-  const tournament = found.tournament;
+  const event =
+    found.event;
+
+  const tournament =
+    found.tournament;
 
   const rawMarkets =
     Array.isArray(event.markets)
@@ -288,7 +527,8 @@ app.get("/", (req, res) => {
     features: [
       "booking-loader",
       "event-markets",
-      "booking-generator"
+      "booking-generator",
+      "multi-page-event-search"
     ]
   });
 });
@@ -320,7 +560,8 @@ app.get("/booking/:code", async (req, res) => {
       headers: sportyBetHeaders()
     });
 
-    const raw = await response.text();
+    const raw =
+      await response.text();
 
     console.log(
       "SportyBet booking status:",
@@ -345,7 +586,8 @@ app.get("/booking/:code", async (req, res) => {
       });
     }
 
-    const booking = data?.data;
+    const booking =
+      data?.data;
 
     if (!booking) {
       return res.status(404).json({
@@ -416,6 +658,7 @@ app.get("/booking/:code", async (req, res) => {
 
             startTime:
               event.estimateStartTime ||
+              event.startTime ||
               null
           });
         }
@@ -466,7 +709,8 @@ app.get(
   "/event-markets/:eventId",
   async (req, res) => {
     const eventId =
-      String(req.params.eventId || "").trim();
+      String(req.params.eventId || "")
+        .trim();
 
     if (!/^sr:match:\d+$/.test(eventId)) {
       return res.status(400).json({
@@ -476,42 +720,65 @@ app.get(
     }
 
     try {
-      const data =
-        await fetchUpcomingEvents();
-
-      const found =
-        findEventInData(
-          data,
+      const result =
+        await findEventAcrossPages(
           eventId
         );
 
-      if (!found) {
+      if (!result?.event) {
         return res.status(404).json({
+          success: false,
+
           error:
             "The event was not found in SportyBet's current upcoming markets.",
 
-          eventId
+          eventId,
+
+          pagesChecked:
+            result?.pagesChecked || 0
         });
       }
 
       const cleaned =
-        cleanEventMarkets(found);
+        cleanEventMarkets({
+          event:
+            result.event,
+          tournament:
+            result.tournament
+        });
 
       if (!cleaned) {
         return res.status(404).json({
+          success: false,
+
           error:
             "SportyBet returned the event, but no usable market data was found.",
 
-          eventId
+          eventId,
+
+          foundOnPage:
+            result.foundOnPage
         });
       }
 
       console.log(
-        `Markets found for ${eventId}:`,
+        `Markets found for ${eventId} on page ${result.foundOnPage}:`,
         cleaned.marketCount
       );
 
-      return res.json(cleaned);
+      return res.json({
+        success: true,
+
+        ...cleaned,
+
+        diagnostics: {
+          foundOnPage:
+            result.foundOnPage,
+
+          pagesChecked:
+            result.pagesChecked
+        }
+      });
 
     } catch (error) {
       console.error(
@@ -520,11 +787,15 @@ app.get(
       );
 
       return res.status(500).json({
+        success: false,
+
         error:
           "Unable to retrieve SportyBet event markets.",
 
         details:
-          error?.message || null
+          error?.message || null,
+
+        eventId
       });
     }
   }
@@ -560,35 +831,31 @@ app.get(
     }
 
     try {
-      /*
-       * IMPORTANT:
-       * Fetch SportyBet's upcoming events ONCE.
-       *
-       * The previous version fetched the same large
-       * SportyBet response separately for every event.
-       *
-       * We now search one response for all requested
-       * event IDs. This is faster and more consistent.
-       */
-
-      const data =
-        await fetchUpcomingEvents();
+      const {
+        foundMap,
+        pagesChecked,
+        totalNum
+      } =
+        await findEventsAcrossPages(
+          eventIds
+        );
 
       const results = [];
 
       for (const eventId of eventIds) {
         const found =
-          findEventInData(
-            data,
-            eventId
-          );
+          foundMap.get(eventId);
 
         if (!found) {
           results.push({
             eventId,
+
             success: false,
+
             error:
-              "Event not found."
+              "Event not found in the SportyBet upcoming-event pages searched.",
+
+            pagesChecked
           });
 
           continue;
@@ -600,9 +867,14 @@ app.get(
         if (!cleaned) {
           results.push({
             eventId,
+
             success: false,
+
             error:
-              "Event found, but no usable market data was returned."
+              "Event found, but no usable market data was returned.",
+
+            foundOnPage:
+              found.foundOnPage
           });
 
           continue;
@@ -610,12 +882,32 @@ app.get(
 
         results.push({
           eventId,
+
           success: true,
-          event: cleaned.event,
-          markets: cleaned.markets,
-          marketCount: cleaned.marketCount
+
+          event:
+            cleaned.event,
+
+          markets:
+            cleaned.markets,
+
+          marketCount:
+            cleaned.marketCount,
+
+          foundOnPage:
+            found.foundOnPage
         });
       }
+
+      const successful =
+        results.filter(
+          item => item.success
+        );
+
+      const failed =
+        results.filter(
+          item => !item.success
+        );
 
       console.log(
         "Requested events:",
@@ -624,19 +916,17 @@ app.get(
 
       console.log(
         "Successful market responses:",
-        results.filter(
-          item => item.success
-        ).length
+        successful.length
       );
 
       console.log(
-        "Events with usable markets:",
-        results.filter(
-          item =>
-            item.success &&
-            Array.isArray(item.markets) &&
-            item.markets.length > 0
-        ).length
+        "Failed market responses:",
+        failed.length
+      );
+
+      console.log(
+        "Pages checked:",
+        pagesChecked
       );
 
       return res.json({
@@ -645,7 +935,33 @@ app.get(
         count:
           results.length,
 
-        results
+        results,
+
+        diagnostics: {
+          requestedEvents:
+            eventIds.length,
+
+          successfulEvents:
+            successful.length,
+
+          failedEvents:
+            failed.length,
+
+          pagesChecked,
+
+          totalSportyBetEvents:
+            totalNum,
+
+          foundEventIds:
+            successful.map(
+              item => item.eventId
+            ),
+
+          missingEventIds:
+            failed.map(
+              item => item.eventId
+            )
+        }
       });
 
     } catch (error) {
