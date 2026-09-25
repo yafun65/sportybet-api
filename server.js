@@ -40,10 +40,28 @@ const PORT = process.env.PORT || 10000;
 const SPORTYBET_BASE = "https://www.sportybet.com";
 const SPORTYBET_REGION = "ng";
 
-// Current verified SportyBet market IDs.
-// DO NOT guess or add IDs here.
+// Existing verified markets.
+// DO NOT change these.
 const MARKET_IDS =
   "1,18,10,29,11,26,36,14,16,45,47,60,60100";
+
+// =====================================================
+// CONFIRMED CORNER MARKETS
+// =====================================================
+//
+// These IDs were obtained from a real SportyBet
+// booking code supplied by the user.
+//
+// 900300 = Home Team Total Corners
+// 166    = Corners - Over/Under
+//
+// DO NOT guess additional IDs.
+// We will add more only after confirming them
+// from real SportyBet data.
+// =====================================================
+
+const CORNER_MARKET_IDS =
+  "900300,166";
 
 const PAGE_SIZE = 100;
 
@@ -66,7 +84,7 @@ function sportyBetHeaders() {
 }
 
 // =====================================================
-// BUILD SPORTYBET UPCOMING EVENTS URL
+// BUILD NORMAL SPORTYBET URL
 // =====================================================
 
 function buildUpcomingEventsUrl(pageNum = 1) {
@@ -87,14 +105,37 @@ function buildUpcomingEventsUrl(pageNum = 1) {
 }
 
 // =====================================================
-// FETCH ONE UPCOMING EVENTS PAGE
+// BUILD CORNER-ONLY SPORTYBET URL
+// =====================================================
+
+function buildCornerEventsUrl(pageNum = 1) {
+  const params = new URLSearchParams({
+    sportId: "sr:sport:1",
+    marketId: CORNER_MARKET_IDS,
+    pageSize: String(PAGE_SIZE),
+    pageNum: String(pageNum),
+    todayGames: "false",
+    timeline: "720",
+    _t: String(Date.now())
+  });
+
+  return (
+    `${SPORTYBET_BASE}/api/${SPORTYBET_REGION}` +
+    `/factsCenter/pcUpcomingEvents?${params.toString()}`
+  );
+}
+
+// =====================================================
+// FETCH ONE NORMAL UPCOMING EVENTS PAGE
 // =====================================================
 
 async function fetchUpcomingEventsPage(
   pageNum = 1,
   forceRefresh = false
 ) {
-  const cached = pageCache.get(pageNum);
+  const cacheKey = `normal-${pageNum}`;
+
+  const cached = pageCache.get(cacheKey);
 
   if (
     !forceRefresh &&
@@ -108,7 +149,7 @@ async function fetchUpcomingEventsPage(
     buildUpcomingEventsUrl(pageNum);
 
   console.log(
-    `Fetching SportyBet upcoming page ${pageNum}...`
+    `Fetching SportyBet normal page ${pageNum}...`
   );
 
   const response = await fetch(url, {
@@ -119,7 +160,7 @@ async function fetchUpcomingEventsPage(
   const raw = await response.text();
 
   console.log(
-    `SportyBet upcoming page ${pageNum} status:`,
+    `SportyBet normal page ${pageNum} status:`,
     response.status
   );
 
@@ -139,7 +180,75 @@ async function fetchUpcomingEventsPage(
     );
   }
 
-  pageCache.set(pageNum, {
+  pageCache.set(cacheKey, {
+    data,
+    timestamp: Date.now()
+  });
+
+  return data;
+}
+
+// =====================================================
+// FETCH ONE CORNER EVENTS PAGE
+// =====================================================
+
+async function fetchCornerEventsPage(
+  pageNum = 1,
+  forceRefresh = false
+) {
+  const cacheKey = `corner-${pageNum}`;
+
+  const cached = pageCache.get(cacheKey);
+
+  if (
+    !forceRefresh &&
+    cached &&
+    Date.now() - cached.timestamp < CACHE_TTL_MS
+  ) {
+    return cached.data;
+  }
+
+  const url =
+    buildCornerEventsUrl(pageNum);
+
+  console.log(
+    `Fetching SportyBet CORNER page ${pageNum}...`
+  );
+
+  console.log(
+    "Corner market IDs:",
+    CORNER_MARKET_IDS
+  );
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: sportyBetHeaders()
+  });
+
+  const raw = await response.text();
+
+  console.log(
+    `SportyBet corner page ${pageNum} status:`,
+    response.status
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `SportyBet returned HTTP ${response.status} for corner page ${pageNum}.`
+    );
+  }
+
+  let data;
+
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      `SportyBet returned invalid JSON for corner page ${pageNum}.`
+    );
+  }
+
+  pageCache.set(cacheKey, {
     data,
     timestamp: Date.now()
   });
@@ -197,7 +306,7 @@ function findEventInData(data, eventId) {
 }
 
 // =====================================================
-// SEARCH ONE EVENT ACROSS PAGES
+// SEARCH ONE EVENT ACROSS NORMAL PAGES
 // =====================================================
 
 async function findEventAcrossPages(eventId) {
@@ -267,7 +376,7 @@ async function findEventAcrossPages(eventId) {
 }
 
 // =====================================================
-// SEARCH MANY EVENTS ACROSS PAGES
+// SEARCH MANY EVENTS ACROSS NORMAL PAGES
 // =====================================================
 
 async function findEventsAcrossPages(eventIds) {
@@ -500,7 +609,23 @@ app.get("/", (req, res) => {
       "multi-page-event-search",
       "market-diagnostic",
       "corner-market-scanner"
-    ]
+    ],
+
+    cornerMarkets: {
+      marketIds:
+        CORNER_MARKET_IDS,
+
+      confirmed: [
+        {
+          marketId: "900300",
+          market: "Home Team Total Corners"
+        },
+        {
+          marketId: "166",
+          market: "Corners - Over/Under"
+        }
+      ]
+    }
   });
 });
 
@@ -1069,14 +1194,11 @@ app.post(
 // CORNER MARKET SCANNER
 // =====================================================
 //
-// IMPORTANT:
-// This scans the markets that SportyBet actually sends
-// through our currently verified MARKET_IDS.
-// It does NOT guess market IDs.
+// Uses ONLY confirmed corner market IDs:
+// 900300 and 166.
 //
-// Once we identify the correct SportyBet corner market
-// request, this endpoint can immediately become the
-// Corner Agent data source.
+// This is now a dedicated corner-market request,
+// rather than scanning the normal 13 markets.
 // =====================================================
 
 app.get(
@@ -1084,7 +1206,7 @@ app.get(
   async (req, res) => {
     try {
       const firstPage =
-        await fetchUpcomingEventsPage(1);
+        await fetchCornerEventsPage(1);
 
       const totalNum =
         Number(
@@ -1114,7 +1236,7 @@ app.get(
         const data =
           page === 1
             ? firstPage
-            : await fetchUpcomingEventsPage(page);
+            : await fetchCornerEventsPage(page);
 
         const tournaments =
           getTournaments(data);
@@ -1132,20 +1254,27 @@ app.get(
                 : [];
 
             for (const market of markets) {
+              const marketId =
+                market?.id !== undefined &&
+                market?.id !== null
+                  ? String(market.id)
+                  : null;
+
+              // Only accept the confirmed corner IDs.
+              if (
+                !CORNER_MARKET_IDS
+                  .split(",")
+                  .includes(marketId)
+              ) {
+                continue;
+              }
+
               const marketName =
                 String(
                   market?.desc ||
                   market?.market ||
                   ""
                 );
-
-              if (
-                !marketName
-                  .toLowerCase()
-                  .includes("corner")
-              ) {
-                continue;
-              }
 
               const outcomes =
                 Array.isArray(market?.outcomes)
@@ -1189,11 +1318,7 @@ app.get(
                   category:
                     tournament?.categoryName || null,
 
-                  marketId:
-                    market?.id !== undefined &&
-                    market?.id !== null
-                      ? String(market.id)
-                      : null,
+                  marketId,
 
                   market:
                     marketName,
@@ -1231,7 +1356,11 @@ app.get(
         success: true,
 
         message:
-          "Corner market scan completed.",
+          "Corner market scan completed using confirmed corner market IDs.",
+
+        cornerMarketIds:
+          CORNER_MARKET_IDS
+            .split(","),
 
         count:
           cornerMarkets.length,
@@ -1260,6 +1389,157 @@ app.get(
 
         details:
           error?.message || null
+      });
+    }
+  }
+);
+
+// =====================================================
+// CORNER MARKET TEST
+// =====================================================
+//
+// Diagnostic endpoint.
+// It fetches ONLY the confirmed corner markets
+// and reports what SportyBet actually returns.
+// =====================================================
+
+app.get(
+  "/corner-market-test",
+  async (req, res) => {
+    try {
+      const data =
+        await fetchCornerEventsPage(
+          1,
+          true
+        );
+
+      const tournaments =
+        getTournaments(data);
+
+      const marketMap =
+        new Map();
+
+      let eventCount = 0;
+
+      for (const tournament of tournaments) {
+        const events =
+          Array.isArray(tournament?.events)
+            ? tournament.events
+            : [];
+
+        for (const event of events) {
+          eventCount++;
+
+          const markets =
+            Array.isArray(event?.markets)
+              ? event.markets
+              : [];
+
+          for (const market of markets) {
+            const marketId =
+              market?.id !== undefined &&
+              market?.id !== null
+                ? String(market.id)
+                : null;
+
+            if (!marketId) {
+              continue;
+            }
+
+            const marketName =
+              market?.desc ||
+              market?.market ||
+              "Unknown market";
+
+            if (
+              !marketMap.has(marketId)
+            ) {
+              marketMap.set(
+                marketId,
+                {
+                  marketId,
+
+                  market:
+                    marketName,
+
+                  specifier:
+                    market?.specifier !== undefined &&
+                    market?.specifier !== null
+                      ? String(
+                          market.specifier
+                        )
+                      : null,
+
+                  outcomes:
+                    Array.isArray(
+                      market?.outcomes
+                    )
+                      ? market.outcomes.map(
+                          outcome => ({
+                            outcomeId:
+                              outcome?.id !== undefined &&
+                              outcome?.id !== null
+                                ? String(
+                                    outcome.id
+                                  )
+                                : null,
+
+                            pick:
+                              outcome?.desc ||
+                              outcome?.pick ||
+                              null,
+
+                            odds:
+                              outcome?.odds !== undefined &&
+                              outcome?.odds !== null
+                                ? Number(
+                                    outcome.odds
+                                  )
+                                : null,
+
+                            isActive:
+                              outcome?.isActive !== false
+                          })
+                        )
+                      : []
+                }
+              );
+            }
+          }
+        }
+      }
+
+      return res.json({
+        success: true,
+
+        requestedMarketIds:
+          CORNER_MARKET_IDS
+            .split(","),
+
+        totalEvents:
+          data?.data?.totalNum || 0,
+
+        eventsOnPage:
+          eventCount,
+
+        marketsReturned:
+          Array.from(
+            marketMap.values()
+          )
+      });
+
+    } catch (error) {
+      console.error(
+        "Corner market test error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+
+        error:
+          error?.message ||
+          "Corner market test failed."
       });
     }
   }
