@@ -1139,7 +1139,186 @@ app.post(
     }
   }
 );
+// =====================================================
+// CORNER MARKET DIAGNOSTIC
+// =====================================================
 
+app.get("/corner-markets", async (req, res) => {
+  try {
+    const firstPage = await fetchUpcomingEventsPage(1);
+
+    const totalNum =
+      Number(firstPage?.data?.totalNum || 0);
+
+    const calculatedPages =
+      totalNum > 0
+        ? Math.ceil(totalNum / PAGE_SIZE)
+        : MAX_EVENT_SEARCH_PAGES;
+
+    const pagesToCheck =
+      Math.min(
+        calculatedPages,
+        MAX_EVENT_SEARCH_PAGES
+      );
+
+    const cornerMarkets = [];
+
+    for (
+      let page = 1;
+      page <= pagesToCheck;
+      page++
+    ) {
+      const data =
+        page === 1
+          ? firstPage
+          : await fetchUpcomingEventsPage(page);
+
+      const tournaments =
+        getTournaments(data);
+
+      for (const tournament of tournaments) {
+        const events =
+          Array.isArray(tournament?.events)
+            ? tournament.events
+            : [];
+
+        for (const event of events) {
+          const markets =
+            Array.isArray(event?.markets)
+              ? event.markets
+              : [];
+
+          for (const market of markets) {
+            const marketName =
+              String(
+                market?.desc ||
+                market?.market ||
+                ""
+              );
+
+            // Only keep markets containing "corner"
+            if (
+              !marketName
+                .toLowerCase()
+                .includes("corner")
+            ) {
+              continue;
+            }
+
+            const outcomes =
+              Array.isArray(market?.outcomes)
+                ? market.outcomes
+                : [];
+
+            for (const outcome of outcomes) {
+              if (outcome?.isActive === false) {
+                continue;
+              }
+
+              cornerMarkets.push({
+                eventId:
+                  event?.eventId || null,
+
+                gameId:
+                  event?.gameId || null,
+
+                match:
+                  event?.homeTeamName &&
+                  event?.awayTeamName
+                    ? `${event.homeTeamName} vs ${event.awayTeamName}`
+                    : "Unknown match",
+
+                homeTeam:
+                  event?.homeTeamName || null,
+
+                awayTeam:
+                  event?.awayTeamName || null,
+
+                startTime:
+                  event?.estimateStartTime ||
+                  event?.startTime ||
+                  null,
+
+                competition:
+                  tournament?.name || null,
+
+                category:
+                  tournament?.categoryName || null,
+
+                marketId:
+                  market?.id !== undefined &&
+                  market?.id !== null
+                    ? String(market.id)
+                    : null,
+
+                market:
+                  marketName,
+
+                specifier:
+                  market?.specifier !== undefined &&
+                  market?.specifier !== null
+                    ? String(market.specifier)
+                    : null,
+
+                outcomeId:
+                  outcome?.id !== undefined &&
+                  outcome?.id !== null
+                    ? String(outcome.id)
+                    : null,
+
+                pick:
+                  outcome?.desc ||
+                  outcome?.pick ||
+                  "Unknown pick",
+
+                odds:
+                  outcome?.odds !== undefined &&
+                  outcome?.odds !== null
+                    ? Number(outcome.odds)
+                    : null
+              });
+            }
+          }
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+
+      message:
+        "Corner markets found successfully.",
+
+      count:
+        cornerMarkets.length,
+
+      pagesChecked:
+        pagesToCheck,
+
+      totalSportyBetEvents:
+        totalNum,
+
+      markets:
+        cornerMarkets
+    });
+
+  } catch (error) {
+    console.error(
+      "Corner market diagnostic error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+
+      error:
+        "Unable to retrieve corner markets.",
+
+      details:
+        error?.message || null
+    });
+  }
+});
 // =====================================================
 // START SERVER
 // =====================================================
