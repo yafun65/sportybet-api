@@ -40,30 +40,16 @@ const PORT = process.env.PORT || 10000;
 const SPORTYBET_BASE = "https://www.sportybet.com";
 const SPORTYBET_REGION = "ng";
 
-// Keep the markets needed by the optimizer.
-// These are SportyBet market IDs, not fabricated IDs.
+// Current verified SportyBet market IDs.
+// DO NOT guess or add IDs here.
 const MARKET_IDS =
   "1,18,10,29,11,26,36,14,16,45,47,60,60100";
 
-// SportyBet allows pageSize up to 100 according to
-// the available API documentation.
 const PAGE_SIZE = 100;
 
-// Search several pages when an event is not on page 1.
-// This prevents us from assuming that page 1 contains
-// every fixture.
 const MAX_EVENT_SEARCH_PAGES = 10;
 
-// Small in-memory cache.
-// Render may restart, so this is only a performance cache,
-// never a source of truth.
 const CACHE_TTL_MS = 30000;
-
-let upcomingCache = {
-  data: null,
-  timestamp: 0,
-  pageNum: null
-};
 
 const pageCache = new Map();
 
@@ -162,7 +148,7 @@ async function fetchUpcomingEventsPage(
 }
 
 // =====================================================
-// BACKWARD-COMPATIBLE FETCH FUNCTION
+// BACKWARD-COMPATIBLE FETCH
 // =====================================================
 
 async function fetchUpcomingEvents() {
@@ -180,7 +166,7 @@ function getTournaments(data) {
 }
 
 // =====================================================
-// FIND EVENT INSIDE ONE SPORTYBET RESPONSE
+// FIND EVENT IN ONE RESPONSE
 // =====================================================
 
 function findEventInData(data, eventId) {
@@ -211,14 +197,10 @@ function findEventInData(data, eventId) {
 }
 
 // =====================================================
-// SEARCH MULTIPLE PAGES FOR ONE EVENT
+// SEARCH ONE EVENT ACROSS PAGES
 // =====================================================
 
 async function findEventAcrossPages(eventId) {
-  // -----------------------------------------------
-  // PAGE 1
-  // -----------------------------------------------
-
   const firstPage =
     await fetchUpcomingEventsPage(1);
 
@@ -235,10 +217,6 @@ async function findEventAcrossPages(eventId) {
       pagesChecked: 1
     };
   }
-
-  // -----------------------------------------------
-  // DETERMINE TOTAL PAGES
-  // -----------------------------------------------
 
   const totalNum =
     Number(
@@ -257,10 +235,6 @@ async function findEventAcrossPages(eventId) {
       calculatedPages,
       MAX_EVENT_SEARCH_PAGES
     );
-
-  // -----------------------------------------------
-  // SEARCH REMAINING PAGES
-  // -----------------------------------------------
 
   for (
     let page = 2;
@@ -304,11 +278,6 @@ async function findEventsAcrossPages(eventIds) {
 
   const foundMap =
     new Map();
-
-  // -----------------------------------------------
-  // Search page by page.
-  // Once all events are found, stop immediately.
-  // -----------------------------------------------
 
   const firstPage =
     await fetchUpcomingEventsPage(1);
@@ -528,13 +497,15 @@ app.get("/", (req, res) => {
       "booking-loader",
       "event-markets",
       "booking-generator",
-      "multi-page-event-search"
+      "multi-page-event-search",
+      "market-diagnostic",
+      "corner-market-scanner"
     ]
   });
 });
 
 // =====================================================
-// LOAD EXISTING SPORTYBET BOOKING CODE
+// LOAD EXISTING SPORTYBET BOOKING
 // =====================================================
 
 app.get("/booking/:code", async (req, res) => {
@@ -761,11 +732,6 @@ app.get(
         });
       }
 
-      console.log(
-        `Markets found for ${eventId} on page ${result.foundOnPage}:`,
-        cleaned.marketCount
-      );
-
       return res.json({
         success: true,
 
@@ -899,36 +865,6 @@ app.get(
         });
       }
 
-      const successful =
-        results.filter(
-          item => item.success
-        );
-
-      const failed =
-        results.filter(
-          item => !item.success
-        );
-
-      console.log(
-        "Requested events:",
-        eventIds.length
-      );
-
-      console.log(
-        "Successful market responses:",
-        successful.length
-      );
-
-      console.log(
-        "Failed market responses:",
-        failed.length
-      );
-
-      console.log(
-        "Pages checked:",
-        pagesChecked
-      );
-
       return res.json({
         success: true,
 
@@ -942,25 +878,19 @@ app.get(
             eventIds.length,
 
           successfulEvents:
-            successful.length,
+            results.filter(
+              item => item.success
+            ).length,
 
           failedEvents:
-            failed.length,
+            results.filter(
+              item => !item.success
+            ).length,
 
           pagesChecked,
 
           totalSportyBetEvents:
-            totalNum,
-
-          foundEventIds:
-            successful.map(
-              item => item.eventId
-            ),
-
-          missingEventIds:
-            failed.map(
-              item => item.eventId
-            )
+            totalNum
         }
       });
 
@@ -1070,11 +1000,6 @@ app.post(
         response.status
       );
 
-      console.log(
-        "SportyBet booking response:",
-        raw
-      );
-
       let data;
 
       try {
@@ -1139,42 +1064,223 @@ app.post(
     }
   }
 );
+
 // =====================================================
-// CORNER MARKET DIAGNOSTIC
+// CORNER MARKET SCANNER
+// =====================================================
+//
+// IMPORTANT:
+// This scans the markets that SportyBet actually sends
+// through our currently verified MARKET_IDS.
+// It does NOT guess market IDs.
+//
+// Once we identify the correct SportyBet corner market
+// request, this endpoint can immediately become the
+// Corner Agent data source.
 // =====================================================
 
-app.get("/corner-markets", async (req, res) => {
-  try {
-    const firstPage = await fetchUpcomingEventsPage(1);
+app.get(
+  "/corner-markets",
+  async (req, res) => {
+    try {
+      const firstPage =
+        await fetchUpcomingEventsPage(1);
 
-    const totalNum =
-      Number(firstPage?.data?.totalNum || 0);
+      const totalNum =
+        Number(
+          firstPage?.data?.totalNum || 0
+        );
 
-    const calculatedPages =
-      totalNum > 0
-        ? Math.ceil(totalNum / PAGE_SIZE)
-        : MAX_EVENT_SEARCH_PAGES;
+      const calculatedPages =
+        totalNum > 0
+          ? Math.ceil(
+              totalNum / PAGE_SIZE
+            )
+          : MAX_EVENT_SEARCH_PAGES;
 
-    const pagesToCheck =
-      Math.min(
-        calculatedPages,
-        MAX_EVENT_SEARCH_PAGES
+      const pagesToCheck =
+        Math.min(
+          calculatedPages,
+          MAX_EVENT_SEARCH_PAGES
+        );
+
+      const cornerMarkets = [];
+
+      for (
+        let page = 1;
+        page <= pagesToCheck;
+        page++
+      ) {
+        const data =
+          page === 1
+            ? firstPage
+            : await fetchUpcomingEventsPage(page);
+
+        const tournaments =
+          getTournaments(data);
+
+        for (const tournament of tournaments) {
+          const events =
+            Array.isArray(tournament?.events)
+              ? tournament.events
+              : [];
+
+          for (const event of events) {
+            const markets =
+              Array.isArray(event?.markets)
+                ? event.markets
+                : [];
+
+            for (const market of markets) {
+              const marketName =
+                String(
+                  market?.desc ||
+                  market?.market ||
+                  ""
+                );
+
+              if (
+                !marketName
+                  .toLowerCase()
+                  .includes("corner")
+              ) {
+                continue;
+              }
+
+              const outcomes =
+                Array.isArray(market?.outcomes)
+                  ? market.outcomes
+                  : [];
+
+              for (const outcome of outcomes) {
+                if (
+                  outcome?.isActive === false
+                ) {
+                  continue;
+                }
+
+                cornerMarkets.push({
+                  eventId:
+                    event?.eventId || null,
+
+                  gameId:
+                    event?.gameId || null,
+
+                  match:
+                    event?.homeTeamName &&
+                    event?.awayTeamName
+                      ? `${event.homeTeamName} vs ${event.awayTeamName}`
+                      : "Unknown match",
+
+                  homeTeam:
+                    event?.homeTeamName || null,
+
+                  awayTeam:
+                    event?.awayTeamName || null,
+
+                  startTime:
+                    event?.estimateStartTime ||
+                    event?.startTime ||
+                    null,
+
+                  competition:
+                    tournament?.name || null,
+
+                  category:
+                    tournament?.categoryName || null,
+
+                  marketId:
+                    market?.id !== undefined &&
+                    market?.id !== null
+                      ? String(market.id)
+                      : null,
+
+                  market:
+                    marketName,
+
+                  specifier:
+                    market?.specifier !== undefined &&
+                    market?.specifier !== null
+                      ? String(market.specifier)
+                      : null,
+
+                  outcomeId:
+                    outcome?.id !== undefined &&
+                    outcome?.id !== null
+                      ? String(outcome.id)
+                      : null,
+
+                  pick:
+                    outcome?.desc ||
+                    outcome?.pick ||
+                    "Unknown pick",
+
+                  odds:
+                    outcome?.odds !== undefined &&
+                    outcome?.odds !== null
+                      ? Number(outcome.odds)
+                      : null
+                });
+              }
+            }
+          }
+        }
+      }
+
+      return res.json({
+        success: true,
+
+        message:
+          "Corner market scan completed.",
+
+        count:
+          cornerMarkets.length,
+
+        pagesChecked:
+          pagesToCheck,
+
+        totalSportyBetEvents:
+          totalNum,
+
+        markets:
+          cornerMarkets
+      });
+
+    } catch (error) {
+      console.error(
+        "Corner market scanner error:",
+        error
       );
 
-    const cornerMarkets = [];
+      return res.status(500).json({
+        success: false,
 
-    for (
-      let page = 1;
-      page <= pagesToCheck;
-      page++
-    ) {
-      const data =
-        page === 1
-          ? firstPage
-          : await fetchUpcomingEventsPage(page);
+        error:
+          "Unable to retrieve corner markets.",
+
+        details:
+          error?.message || null
+      });
+    }
+  }
+);
+
+// =====================================================
+// MARKET DIAGNOSTIC
+// =====================================================
+
+app.get(
+  "/all-markets",
+  async (req, res) => {
+    try {
+      const firstPage =
+        await fetchUpcomingEventsPage(1);
+
+      const marketsFound =
+        new Map();
 
       const tournaments =
-        getTournaments(data);
+        getTournaments(firstPage);
 
       for (const tournament of tournaments) {
         const events =
@@ -1189,359 +1295,64 @@ app.get("/corner-markets", async (req, res) => {
               : [];
 
           for (const market of markets) {
-            const marketName =
-              String(
-                market?.desc ||
-                market?.market ||
-                ""
+            const id =
+              market?.id !== undefined &&
+              market?.id !== null
+                ? String(market.id)
+                : null;
+
+            const name =
+              market?.desc ||
+              market?.market ||
+              "Unknown market";
+
+            if (id) {
+              marketsFound.set(
+                id,
+                name
               );
-
-            // Only keep markets containing "corner"
-            if (
-              !marketName
-                .toLowerCase()
-                .includes("corner")
-            ) {
-              continue;
-            }
-
-            const outcomes =
-              Array.isArray(market?.outcomes)
-                ? market.outcomes
-                : [];
-
-            for (const outcome of outcomes) {
-              if (outcome?.isActive === false) {
-                continue;
-              }
-
-              cornerMarkets.push({
-                eventId:
-                  event?.eventId || null,
-
-                gameId:
-                  event?.gameId || null,
-
-                match:
-                  event?.homeTeamName &&
-                  event?.awayTeamName
-                    ? `${event.homeTeamName} vs ${event.awayTeamName}`
-                    : "Unknown match",
-
-                homeTeam:
-                  event?.homeTeamName || null,
-
-                awayTeam:
-                  event?.awayTeamName || null,
-
-                startTime:
-                  event?.estimateStartTime ||
-                  event?.startTime ||
-                  null,
-
-                competition:
-                  tournament?.name || null,
-
-                category:
-                  tournament?.categoryName || null,
-
-                marketId:
-                  market?.id !== undefined &&
-                  market?.id !== null
-                    ? String(market.id)
-                    : null,
-
-                market:
-                  marketName,
-
-                specifier:
-                  market?.specifier !== undefined &&
-                  market?.specifier !== null
-                    ? String(market.specifier)
-                    : null,
-
-                outcomeId:
-                  outcome?.id !== undefined &&
-                  outcome?.id !== null
-                    ? String(outcome.id)
-                    : null,
-
-                pick:
-                  outcome?.desc ||
-                  outcome?.pick ||
-                  "Unknown pick",
-
-                odds:
-                  outcome?.odds !== undefined &&
-                  outcome?.odds !== null
-                    ? Number(outcome.odds)
-                    : null
-              });
             }
           }
         }
       }
+
+      return res.json({
+        success: true,
+
+        marketCount:
+          marketsFound.size,
+
+        markets:
+          Array.from(
+            marketsFound,
+            ([id, name]) => ({
+              marketId: id,
+              market: name
+            })
+          )
+      });
+
+    } catch (error) {
+      console.error(
+        "All markets diagnostic error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+
+        error:
+          error?.message ||
+          "Unable to inspect markets."
+      });
     }
-
-    return res.json({
-      success: true,
-
-      message:
-        "Corner markets found successfully.",
-
-      count:
-        cornerMarkets.length,
-
-      pagesChecked:
-        pagesToCheck,
-
-      totalSportyBetEvents:
-        totalNum,
-
-      markets:
-        cornerMarkets
-    });
-
-  } catch (error) {
-    console.error(
-      "Corner market diagnostic error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-
-      error:
-        "Unable to retrieve corner markets.",
-
-      details:
-        error?.message || null
-    });
   }
-});
-// =====================================================
-// MARKET DIAGNOSTIC
-// =====================================================
+);
 
-app.get("/all-markets", async (req, res) => {
-  try {
-    const firstPage =
-      await fetchUpcomingEventsPage(1);
-
-    const marketsFound = new Map();
-
-    const tournaments =
-      getTournaments(firstPage);
-
-    for (const tournament of tournaments) {
-      const events =
-        Array.isArray(tournament?.events)
-          ? tournament.events
-          : [];
-
-      for (const event of events) {
-        const markets =
-          Array.isArray(event?.markets)
-            ? event.markets
-            : [];
-
-        for (const market of markets) {
-          const id =
-            market?.id !== undefined &&
-            market?.id !== null
-              ? String(market.id)
-              : null;
-
-          const name =
-            market?.desc ||
-            market?.market ||
-            "Unknown market";
-
-          if (id) {
-            marketsFound.set(id, name);
-          }
-        }
-      }
-    }
-
-    return res.json({
-      success: true,
-
-      marketCount:
-        marketsFound.size,
-
-      markets:
-        Array.from(
-          marketsFound,
-          ([id, name]) => ({
-            marketId: id,
-            market: name
-          })
-        )
-    });
-
-  } catch (error) {
-    console.error(
-      "All markets diagnostic error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-      error:
-        error?.message ||
-        "Unable to inspect markets."
-    });
-  }
-});
 // =====================================================
 // START SERVER
 // =====================================================
-// =====================================================
-// CORNER MARKET DISCOVERY
-// =====================================================
 
-app.get("/corner-discovery", async (req, res) => {
-  try {
-    const cornerMarketIds = [
-      "2",
-      "3",
-      "4",
-      "5",
-      "6",
-      "7",
-      "8",
-      "9",
-      "12",
-      "13",
-      "15",
-      "17",
-      "19",
-      "20",
-      "21",
-      "22",
-      "23",
-      "24",
-      "25",
-      "27",
-      "28",
-      "30",
-      "31",
-      "32",
-      "33",
-      "34",
-      "35",
-      "37",
-      "38",
-      "39",
-      "40",
-      "41",
-      "42",
-      "43",
-      "44",
-      "46",
-      "48",
-      "49",
-      "50",
-      "51",
-      "52",
-      "53",
-      "54",
-      "55",
-      "56",
-      "57",
-      "58",
-      "59"
-    ].join(",");
-
-    const url =
-      `${SPORTYBET_BASE}/api/${SPORTYBET_REGION}` +
-      `/factsCenter/pcUpcomingEvents` +
-      `?sportId=sr%3Asport%3A1` +
-      `&marketIds=${encodeURIComponent(cornerMarketIds)}` +
-      `&pageSize=${PAGE_SIZE}` +
-      `&pageNum=1` +
-      `&todayGames=false` +
-      `&timeline=720` +
-      `&_t=${Date.now()}`;
-
-    const response = await fetch(url, {
-      headers: sportyBetHeaders()
-    });
-
-    if (!response.ok) {
-      throw new Error(
-        `SportyBet returned HTTP ${response.status}`
-      );
-    }
-
-    const data = await response.json();
-
-    const marketsFound = new Map();
-
-    const tournaments =
-      getTournaments(data);
-
-    for (const tournament of tournaments) {
-      const events =
-        Array.isArray(tournament?.events)
-          ? tournament.events
-          : [];
-
-      for (const event of events) {
-        const markets =
-          Array.isArray(event?.markets)
-            ? event.markets
-            : [];
-
-        for (const market of markets) {
-          const marketId =
-            market?.id !== undefined &&
-            market?.id !== null
-              ? String(market.id)
-              : null;
-
-          const marketName =
-            market?.desc ||
-            market?.market ||
-            "Unknown market";
-
-          if (marketId) {
-            marketsFound.set(
-              marketId,
-              marketName
-            );
-          }
-        }
-      }
-    }
-
-    return res.json({
-      success: true,
-      marketCount: marketsFound.size,
-      markets: Array.from(
-        marketsFound,
-        ([marketId, market]) => ({
-          marketId,
-          market
-        })
-      )
-    });
-
-  } catch (error) {
-    console.error(
-      "Corner discovery error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-      error:
-        error?.message ||
-        "Unable to discover corner markets."
-    });
-  }
-});
 app.listen(
   PORT,
   "0.0.0.0",
