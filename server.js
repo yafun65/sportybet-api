@@ -1320,6 +1320,81 @@ app.get("/corner-markets", async (req, res) => {
   }
 });
 // =====================================================
+// MARKET DIAGNOSTIC
+// =====================================================
+
+app.get("/all-markets", async (req, res) => {
+  try {
+    const firstPage =
+      await fetchUpcomingEventsPage(1);
+
+    const marketsFound = new Map();
+
+    const tournaments =
+      getTournaments(firstPage);
+
+    for (const tournament of tournaments) {
+      const events =
+        Array.isArray(tournament?.events)
+          ? tournament.events
+          : [];
+
+      for (const event of events) {
+        const markets =
+          Array.isArray(event?.markets)
+            ? event.markets
+            : [];
+
+        for (const market of markets) {
+          const id =
+            market?.id !== undefined &&
+            market?.id !== null
+              ? String(market.id)
+              : null;
+
+          const name =
+            market?.desc ||
+            market?.market ||
+            "Unknown market";
+
+          if (id) {
+            marketsFound.set(id, name);
+          }
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+
+      marketCount:
+        marketsFound.size,
+
+      markets:
+        Array.from(
+          marketsFound,
+          ([id, name]) => ({
+            marketId: id,
+            market: name
+          })
+        )
+    });
+
+  } catch (error) {
+    console.error(
+      "All markets diagnostic error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      error:
+        error?.message ||
+        "Unable to inspect markets."
+    });
+  }
+});
+// =====================================================
 // START SERVER
 // =====================================================
 
