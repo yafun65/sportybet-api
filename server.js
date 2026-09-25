@@ -1397,7 +1397,151 @@ app.get("/all-markets", async (req, res) => {
 // =====================================================
 // START SERVER
 // =====================================================
+// =====================================================
+// CORNER MARKET DISCOVERY
+// =====================================================
 
+app.get("/corner-discovery", async (req, res) => {
+  try {
+    const cornerMarketIds = [
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "12",
+      "13",
+      "15",
+      "17",
+      "19",
+      "20",
+      "21",
+      "22",
+      "23",
+      "24",
+      "25",
+      "27",
+      "28",
+      "30",
+      "31",
+      "32",
+      "33",
+      "34",
+      "35",
+      "37",
+      "38",
+      "39",
+      "40",
+      "41",
+      "42",
+      "43",
+      "44",
+      "46",
+      "48",
+      "49",
+      "50",
+      "51",
+      "52",
+      "53",
+      "54",
+      "55",
+      "56",
+      "57",
+      "58",
+      "59"
+    ].join(",");
+
+    const url =
+      `${SPORTYBET_BASE}/api/${SPORTYBET_REGION}` +
+      `/factsCenter/pcUpcomingEvents` +
+      `?sportId=sr%3Asport%3A1` +
+      `&marketIds=${encodeURIComponent(cornerMarketIds)}` +
+      `&pageSize=${PAGE_SIZE}` +
+      `&pageNum=1` +
+      `&todayGames=false` +
+      `&timeline=720` +
+      `&_t=${Date.now()}`;
+
+    const response = await fetch(url, {
+      headers: sportyBetHeaders()
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `SportyBet returned HTTP ${response.status}`
+      );
+    }
+
+    const data = await response.json();
+
+    const marketsFound = new Map();
+
+    const tournaments =
+      getTournaments(data);
+
+    for (const tournament of tournaments) {
+      const events =
+        Array.isArray(tournament?.events)
+          ? tournament.events
+          : [];
+
+      for (const event of events) {
+        const markets =
+          Array.isArray(event?.markets)
+            ? event.markets
+            : [];
+
+        for (const market of markets) {
+          const marketId =
+            market?.id !== undefined &&
+            market?.id !== null
+              ? String(market.id)
+              : null;
+
+          const marketName =
+            market?.desc ||
+            market?.market ||
+            "Unknown market";
+
+          if (marketId) {
+            marketsFound.set(
+              marketId,
+              marketName
+            );
+          }
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      marketCount: marketsFound.size,
+      markets: Array.from(
+        marketsFound,
+        ([marketId, market]) => ({
+          marketId,
+          market
+        })
+      )
+    });
+
+  } catch (error) {
+    console.error(
+      "Corner discovery error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      error:
+        error?.message ||
+        "Unable to discover corner markets."
+    });
+  }
+});
 app.listen(
   PORT,
   "0.0.0.0",
