@@ -1,3 +1,6 @@
+import {
+  runSelectionEngine
+} from "./selectionEngine.js";
 import express from "express";
 
 const app = express();
@@ -631,7 +634,108 @@ function cleanEventMarkets(found) {
 // It does NOT assume that every match has every market.
 // It only returns markets SportyBet actually provides.
 // =====================================================
+app.get("/selection-engine", async (req, res) => {
+  try {
+    const target = Number(req.query.target || 100);
 
+    if (!Number.isFinite(target) || target <= 1) {
+      return res.status(400).json({
+        success: false,
+        error: "Target odds must be greater than 1."
+      });
+    }
+
+    /*
+      Reuse the existing SportyBet market scanner.
+    */
+    const pageResults = [];
+
+    for (
+      let pageNum = 1;
+      pageNum <= MAX_EVENT_SEARCH_PAGES;
+      pageNum++
+    ) {
+      const data =
+        await fetchUpcomingEventsPage(
+          pageNum,
+          false
+        );
+
+      const tournaments =
+        getTournaments(data);
+
+      for (const tournament of tournaments) {
+        const competition =
+          tournament?.name ||
+          tournament?.tournamentName ||
+          "";
+
+        if (
+          !isAllowedCompetition(
+            competition
+          )
+        ) {
+          continue;
+        }
+
+        const events =
+          Array.isArray(tournament.events)
+            ? tournament.events
+            : [];
+
+        for (const event of events) {
+          const cleaned =
+            cleanEventMarkets({
+              event,
+              tournament
+            });
+
+          if (cleaned) {
+            pageResults.push(cleaned);
+          }
+        }
+      }
+    }
+
+    const engine =
+      runSelectionEngine(
+        pageResults,
+        target,
+        {
+          minOdds: 1.15,
+          maxOdds: 3.5,
+          minConfidence: 55,
+          tolerance: 0.20,
+          maxSelections: 15
+        }
+      );
+
+    res.json({
+      success: true,
+      generatedAt: new Date().toISOString(),
+
+      competitions:
+        ALLOWED_COMPETITIONS,
+
+      targetOdds: target,
+
+      ...engine
+    });
+
+  } catch (error) {
+    console.error(
+      "Selection engine error:",
+      error
+    );
+
+    res.status(500).json({
+      success: false,
+      error:
+        error.message ||
+        "Selection engine failed."
+    });
+  }
+});
 app.get(
   "/available-markets",
   async (req, res) => {
