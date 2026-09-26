@@ -238,45 +238,51 @@ app.get("/selection-engine", async (req, res) => {
      * Different strategies must
      * never share the same cache.
      */
+const includeCandidates =
+  String(
+    req.query.includeCandidates ||
+    ""
+  ).toLowerCase() === "true";
 
-    const cacheKey = [
+const cacheKey = [
 
-      target,
+  target,
 
-      strategy,
+  strategy,
 
-      strategyConfig.minOdds,
+  strategyConfig.minOdds,
 
-      strategyConfig.maxOdds,
+  strategyConfig.maxOdds,
 
-      strategyConfig.maxSelections
+  strategyConfig.maxSelections,
 
-    ].join(":");
+  includeCandidates
 
-
-    const cached =
-      selectionCache.get(
-        cacheKey
-      );
+].join(":");
 
 
-    if (
-      cached &&
-      Date.now() -
-        cached.timestamp <
-        SELECTION_CACHE_TTL_MS
-    ) {
+const cached =
+  selectionCache.get(
+    cacheKey
+  );
 
-      return res.json({
 
-        ...cached.data,
+if (
+  cached &&
+  Date.now() -
+    cached.timestamp <
+    SELECTION_CACHE_TTL_MS
+) {
 
-        cached: true
+  return res.json({
 
-      });
+    ...cached.data,
 
-    }
+    cached: true
 
+  });
+
+}
 
     /*
      * =========================
