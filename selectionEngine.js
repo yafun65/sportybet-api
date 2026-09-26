@@ -1,602 +1,504 @@
-/* =========================================================
-   SPORTYBET SELECTION ENGINE
-   STRATEGY-AWARE LIGHTWEIGHT QUALITY OPTIMIZER
-========================================================= */
+/*
+ * ============================================
+ * SPORTYBET SELECTION ENGINE
+ * STRATEGY-AWARE VERSION
+ * ============================================
+ */
+
+const ENGINE_VERSION = "STRATEGY_ENGINE_V3";
 
 
-/* =========================
-   NORMALIZE
-========================= */
+/*
+ * ============================================
+ * HELPERS
+ * ============================================
+ */
 
-function normalize(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase();
+function toNumber(value, fallback = 0) {
+
+  const number = Number(value);
+
+  return Number.isFinite(number)
+    ? number
+    : fallback;
+
 }
 
 
-/* =========================
-   ALLOWED COMPETITIONS
-========================= */
+function clamp(value, min, max) {
 
-const ALLOWED_COMPETITIONS = [
-  "Premier League",
-  "La Liga",
-  "Serie A",
-  "Bundesliga",
-  "Ligue 1",
-  "UEFA Champions League",
-  "UEFA Europa League",
-  "UEFA Conference League",
-  "UEFA Nations League"
-];
-
-
-function isAllowedCompetition(name) {
-  const value = normalize(name);
-
-  return ALLOWED_COMPETITIONS.some(
-    competition =>
-      normalize(competition) === value
+  return Math.max(
+    min,
+    Math.min(max, value)
   );
+
 }
 
 
-/* =========================
-   EVENT INFORMATION
-========================= */
+/*
+ * ============================================
+ * STRATEGY CONFIG
+ * ============================================
+ */
 
-function getEventInfo(item) {
+function getStrategyConfig(strategy) {
 
-  const event =
-    item?.event || {};
+  switch (strategy) {
 
-  const competition =
-    event.competition ||
-    event.sport?.category?.tournament?.name ||
-    event.tournament?.name ||
-    "";
+    case "conservative":
 
-  const category =
-    event.category ||
-    event.sport?.category?.name ||
-    "";
+      return {
+        minOdds: 1.01,
+        maxOdds: 1.20,
+        minProbability: 0.55,
+        minStrength: 60,
+        maxSelections: 50
+      };
 
-  return {
 
-    eventId:
-      event.eventId || "",
+    case "balanced":
 
-    gameId:
-      event.gameId || "",
+      return {
+        minOdds: 1.15,
+        maxOdds: 3.50,
+        minProbability: 0.55,
+        minStrength: 60,
+        maxSelections: 15
+      };
 
-    homeTeam:
-      event.homeTeamName || "",
 
-    awayTeam:
-      event.awayTeamName || "",
+    case "aggressive":
 
-    startTime:
-      event.startTime ??
-      event.estimateStartTime ??
+      return {
+        minOdds: 1.50,
+        maxOdds: 5.00,
+        minProbability: 0.45,
+        minStrength: 45,
+        maxSelections: 15
+      };
+
+
+    default:
+
+      return {
+        minOdds: 1.01,
+        maxOdds: 3.50,
+        minProbability: 0.55,
+        minStrength: 60,
+        maxSelections: 30
+      };
+
+  }
+
+}
+
+
+/*
+ * ============================================
+ * ODDS QUALITY
+ * ============================================
+ */
+
+function getOddsQuality(
+  selection,
+  strategy
+) {
+
+  const odds =
+    toNumber(selection.odds);
+
+
+  if (strategy === "conservative") {
+
+    if (odds >= 1.01 && odds <= 1.10) {
+      return 100;
+    }
+
+    if (odds <= 1.15) {
+      return 96;
+    }
+
+    if (odds <= 1.20) {
+      return 92;
+    }
+
+    return -100;
+
+  }
+
+
+  if (strategy === "aggressive") {
+
+    if (odds >= 1.50 && odds <= 2.00) {
+      return 100;
+    }
+
+    if (odds <= 2.50) {
+      return 94;
+    }
+
+    if (odds <= 3.50) {
+      return 88;
+    }
+
+    if (odds <= 5.00) {
+      return 80;
+    }
+
+    return -100;
+
+  }
+
+
+  /*
+   * BALANCED
+   */
+
+  if (odds >= 1.30 && odds <= 1.80) {
+    return 100;
+  }
+
+  if (odds < 1.30) {
+    return 88;
+  }
+
+  if (odds <= 2.20) {
+    return 92;
+  }
+
+  if (odds <= 3.50) {
+    return 80;
+  }
+
+  return -100;
+
+}
+
+
+/*
+ * ============================================
+ * SELECTION SCORE
+ * ============================================
+ */
+
+function scoreSelection(
+  selection,
+  strategy
+) {
+
+  const probability =
+    clamp(
+      toNumber(selection.probability),
       0,
+      1
+    );
 
-    competition,
 
-    category
-  };
+  const strength =
+    clamp(
+      toNumber(selection.strengthScore),
+      0,
+      100
+    );
+
+
+  const oddsQuality =
+    getOddsQuality(
+      selection,
+      strategy
+    );
+
+
+  if (oddsQuality < 0) {
+    return -9999;
+  }
+
+
+  /*
+   * Probability contributes strongly.
+   */
+
+  const probabilityScore =
+    probability * 100;
+
+
+  /*
+   * Strength contributes strongly.
+   */
+
+  const strengthScore =
+    strength;
+
+
+  /*
+   * Combined quality.
+   */
+
+  return (
+    probabilityScore * 0.45 +
+    strengthScore * 0.35 +
+    oddsQuality * 0.20
+  );
+
 }
 
 
-/* =========================
-   EXTRACT CANDIDATES
-========================= */
+/*
+ * ============================================
+ * EXTRACT CANDIDATES
+ * ============================================
+ */
 
 function extractCandidates(items) {
 
   const candidates = [];
 
-  for (const item of items) {
+
+  for (
+    const item
+    of Array.isArray(items)
+      ? items
+      : []
+  ) {
+
+    if (
+      !item ||
+      !item.event
+    ) {
+      continue;
+    }
+
 
     const event =
-      getEventInfo(item);
+      item.event;
 
-    if (
-      !event.eventId ||
-      !event.homeTeam ||
-      !event.awayTeam
-    ) {
-      continue;
-    }
-
-    if (
-      !isAllowedCompetition(
-        event.competition
-      )
-    ) {
-      continue;
-    }
 
     const markets =
       Array.isArray(item.markets)
         ? item.markets
         : [];
 
-    for (const market of markets) {
 
-      const marketId =
-        String(
-          market?.marketId ??
-          market?.id ??
-          ""
-        );
-
-      const marketName =
-        market?.market ||
-        market?.name ||
-        market?.desc ||
-        "";
-
-      const specifier =
-        market?.specifier ??
-        null;
+    for (
+      const market
+      of markets
+    ) {
 
       const outcomes =
         Array.isArray(
-          market?.outcomes
+          market.outcomes
         )
           ? market.outcomes
           : [];
 
-      for (const outcome of outcomes) {
 
-        const odds =
-          Number(
-            outcome?.odds ??
-            outcome?.price
-          );
+      for (
+        const outcome
+        of outcomes
+      ) {
 
         if (
-          !Number.isFinite(odds) ||
-          odds <= 1
+          !outcome ||
+          outcome.isActive === false
         ) {
           continue;
         }
 
-        const probability =
-          Number(
-            outcome?.probability
+
+        const odds =
+          toNumber(
+            outcome.odds
           );
 
-        const active =
-          outcome?.isActive !== false &&
-          outcome?.isActive !== 0;
 
-        if (!active) {
+        const probability =
+          toNumber(
+            outcome.probability
+          );
+
+
+        if (
+          odds < 1.01 ||
+          probability <= 0
+        ) {
           continue;
         }
 
-        const outcomeId =
+
+        const marketName =
           String(
-            outcome?.outcomeId ??
-            outcome?.id ??
+            market.market ||
+            market.name ||
+            market.desc ||
             ""
           );
 
-        const pick =
-          outcome?.pick ||
-          outcome?.desc ||
-          outcome?.name ||
-          "";
+
+        /*
+         * Exclude markets that are generally
+         * too volatile for this optimizer.
+         */
+
+        const lowerMarket =
+          marketName.toLowerCase();
+
+
+        if (
+          lowerMarket.includes(
+            "correct score"
+          ) ||
+          lowerMarket.includes(
+            "half time/full time"
+          )
+        ) {
+          continue;
+        }
+
+
+        /*
+         * Strength based primarily on bookmaker
+         * supplied probability.
+         */
+
+        let strengthScore =
+          Math.round(
+            probability * 100
+          );
+
+
+        /*
+         * Give a small quality adjustment
+         * for odds.
+         */
+
+        if (odds >= 1.30) {
+          strengthScore += 2;
+        }
+
+
+        if (odds >= 1.50) {
+          strengthScore += 2;
+        }
+
+
+        strengthScore =
+          clamp(
+            strengthScore,
+            0,
+            100
+          );
+
 
         candidates.push({
 
           eventId:
-            event.eventId,
+            String(
+              event.eventId ||
+              event.id ||
+              ""
+            ),
 
           gameId:
-            event.gameId,
+            String(
+              event.gameId ||
+              ""
+            ),
 
           match:
-            `${event.homeTeam} vs ${event.awayTeam}`,
+            `${event.homeTeamName || ""} vs ${event.awayTeamName || ""}`,
 
           homeTeam:
-            event.homeTeam,
+            event.homeTeamName ||
+            "",
 
           awayTeam:
-            event.awayTeam,
+            event.awayTeamName ||
+            "",
 
           startTime:
-            event.startTime,
+            event.startTime ??
+            null,
 
           competition:
-            event.competition,
+            event.competition ||
+            "",
 
           category:
-            event.category,
+            event.category ||
+            "",
 
-          marketId,
+          marketId:
+            String(
+              market.marketId ||
+              market.id ||
+              ""
+            ),
 
           market:
             marketName,
 
-          specifier,
+          specifier:
+            market.specifier ??
+            null,
 
-          outcomeId,
+          outcomeId:
+            String(
+              outcome.outcomeId ||
+              outcome.id ||
+              ""
+            ),
 
-          pick,
+          pick:
+            outcome.pick ||
+            outcome.desc ||
+            "",
 
           odds,
 
-          probability:
-            Number.isFinite(probability)
-              ? probability
-              : null
+          probability,
+
+          bookmakerProbability:
+            Number(
+              (
+                probability * 100
+              ).toFixed(2)
+            ),
+
+          impliedProbability:
+            Number(
+              (
+                probability * 100
+              ).toFixed(2)
+            ),
+
+          strengthScore,
+
+          risk:
+            strengthScore >= 80
+              ? "Lower"
+              : strengthScore >= 65
+                ? "Moderate"
+                : "Higher"
+
         });
+
       }
+
     }
+
   }
+
 
   return candidates;
+
 }
 
 
-/* =========================
-   PROBABILITY
-========================= */
-
-function getImpliedProbability(selection) {
-
-  if (
-    Number.isFinite(
-      selection?.probability
-    ) &&
-    selection.probability > 0 &&
-    selection.probability <= 1
-  ) {
-    return selection.probability;
-  }
-
-  const odds =
-    Number(selection?.odds);
-
-  if (
-    !Number.isFinite(odds) ||
-    odds <= 1
-  ) {
-    return 0;
-  }
-
-  return 1 / odds;
-}
-
-
-/* =========================
-   MARKET FAMILY
-========================= */
-
-function marketFamily(selection) {
-
-  const market =
-    normalize(
-      selection.market
-    );
-
-  if (
-    market.includes(
-      "double chance"
-    )
-  ) {
-    return "double-chance";
-  }
-
-  if (
-    market.includes(
-      "over/under"
-    )
-  ) {
-    return "over-under";
-  }
-
-  if (
-    market.includes(
-      "draw no bet"
-    )
-  ) {
-    return "draw-no-bet";
-  }
-
-  if (
-    market.includes(
-      "gg/ng"
-    )
-  ) {
-    return "gg-ng";
-  }
-
-  if (
-    market.includes(
-      "asian handicap"
-    )
-  ) {
-    return "asian-handicap";
-  }
-
-  if (
-    market.includes(
-      "corners"
-    )
-  ) {
-    return "corners";
-  }
-
-  return market || "other";
-}
-
-
-/* =========================
-   EVENT KEY
-========================= */
-
-function eventKey(selection) {
-
-  return (
-    selection.eventId ||
-    selection.gameId ||
-    selection.match
-  );
-}
-
-
-/* =========================
-   MARKET ADJUSTMENT
-========================= */
-
-function getMarketAdjustment(selection) {
-
-  const market =
-    normalize(selection.market);
-
-  let adjustment = 0;
-
-  if (
-    market.includes(
-      "double chance"
-    )
-  ) {
-    adjustment += 2;
-  }
-
-  if (
-    market.includes(
-      "draw no bet"
-    )
-  ) {
-    adjustment += 2;
-  }
-
-  if (
-    market.includes(
-      "over/under"
-    )
-  ) {
-    adjustment += 1;
-  }
-
-  if (
-    market.includes(
-      "asian handicap"
-    )
-  ) {
-    adjustment += 1;
-  }
-
-  if (
-    market.includes(
-      "gg/ng"
-    )
-  ) {
-    adjustment += 1;
-  }
-
-  if (
-    market.includes(
-      "corners"
-    )
-  ) {
-    adjustment += 1;
-  }
-
-  return adjustment;
-}
-
-
-/* =========================
-   ODDS QUALITY
-========================= */
-
-function getOddsQuality(
-  selection,
-  strategy = "balanced"
-) {
-
-  const odds =
-    Number(selection.odds);
-
-  if (!Number.isFinite(odds)) {
-    return -20;
-  }
-
-
-  /*
-   * Conservative mode:
-   *
-   * Do NOT penalize low odds.
-   *
-   * The whole purpose of this strategy
-   * is to allow smaller individual odds.
-   */
-
-  if (
-    strategy === "conservative"
-  ) {
-
-    if (odds <= 1.20) {
-      return 3;
-    }
-
-    return -20;
-  }
-
-
-  /*
-   * Aggressive mode:
-   *
-   * Give more room to higher odds.
-   */
-
-  if (
-    strategy === "aggressive"
-  ) {
-
-    if (
-      odds >= 1.50 &&
-      odds <= 3.50
-    ) {
-      return 5;
-    }
-
-    if (
-      odds > 3.50 &&
-      odds <= 5.00
-    ) {
-      return 3;
-    }
-
-    if (odds < 1.30) {
-      return -4;
-    }
-
-    return 0;
-  }
-
-
-  /*
-   * Balanced mode.
-   */
-
-  if (odds < 1.17) {
-    return -8;
-  }
-
-  if (odds < 1.20) {
-    return -5;
-  }
-
-  if (odds < 1.25) {
-    return -3;
-  }
-
-  if (
-    odds >= 1.30 &&
-    odds <= 2.50
-  ) {
-    return 4;
-  }
-
-  if (
-    odds > 2.50 &&
-    odds <= 3.50
-  ) {
-    return -1;
-  }
-
-  return 0;
-}
-
-
-/* =========================
-   STRENGTH SCORE
-========================= */
-
-function scoreSelection(
-  selection,
-  strategy = "balanced"
-) {
-
-  const probability =
-    getImpliedProbability(
-      selection
-    );
-
-  let score =
-    probability * 100;
-
-  score +=
-    getMarketAdjustment(
-      selection
-    );
-
-  score +=
-    getOddsQuality(
-      selection,
-      strategy
-    );
-
-  const odds =
-    Number(selection.odds);
-
-
-  /*
-   * Only apply large odds penalties
-   * outside conservative mode.
-   */
-
-  if (
-    strategy !== "conservative"
-  ) {
-
-    if (odds >= 4) {
-      score -= 10;
-    }
-
-    if (odds >= 6) {
-      score -= 15;
-    }
-  }
-
-
-  return Math.max(
-    1,
-    Math.min(
-      95,
-      Math.round(score)
-    )
-  );
-}
-
-
-/* =========================
-   RISK
-========================= */
-
-function getRisk(score) {
-
-  if (score >= 82) {
-    return "Lower";
-  }
-
-  if (score >= 70) {
-    return "Moderate";
-  }
-
-  return "Higher";
-}
-
-
-/* =========================
-   FILTER
-========================= */
+/*
+ * ============================================
+ * FILTER CANDIDATES
+ * ============================================
+ */
 
 function filterCandidates(
   candidates,
@@ -607,38 +509,36 @@ function filterCandidates(
     selection => {
 
       const odds =
-        Number(selection.odds);
+        toNumber(
+          selection.odds
+        );
+
 
       const probability =
-        getImpliedProbability(
-          selection
+        toNumber(
+          selection.probability
         );
 
-      const score =
-        scoreSelection(
-          selection,
-          options.strategy
-        );
 
-      const market =
-        normalize(
-          selection.market
+      const strength =
+        toNumber(
+          selection.strengthScore
         );
 
 
       /*
-       * HARD ODDS LIMIT
+       * HARD ODDS LIMIT.
        *
-       * This guarantees that a strategy
-       * can never silently exceed its
-       * configured maximum odds.
+       * This is the most important rule.
        */
 
       if (
         odds < options.minOdds ||
         odds > options.maxOdds
       ) {
+
         return false;
+
       }
 
 
@@ -646,676 +546,401 @@ function filterCandidates(
         probability <
         options.minProbability
       ) {
+
         return false;
+
       }
 
 
       if (
-        score <
+        strength <
         options.minStrength
       ) {
+
         return false;
-      }
 
-
-      /*
-       * Avoid very high-variance markets.
-       */
-
-      if (
-        market.includes(
-          "correct score"
-        )
-      ) {
-        return false;
-      }
-
-
-      if (
-        market.includes(
-          "half time/full time"
-        )
-      ) {
-        return false;
       }
 
 
       return true;
+
     }
   );
+
 }
 
 
-/* =========================
-   CANDIDATE QUALITY
-========================= */
-
-function candidateQuality(
-  selection,
-  strategy = "balanced"
-) {
-
-  const strength =
-    scoreSelection(
-      selection,
-      strategy
-    );
-
-  const odds =
-    Number(selection.odds);
-
-  let quality =
-    strength;
-
-
-  /*
-   * Balanced prefers useful
-   * middle-range odds.
-   */
-
-  if (
-    strategy === "balanced" &&
-    odds >= 1.30 &&
-    odds <= 2.50
-  ) {
-    quality += 5;
-  }
-
-
-  /*
-   * Conservative prefers the
-   * lower-odds range.
-   */
-
-  if (
-    strategy === "conservative"
-  ) {
-
-    if (
-      odds >= 1.10 &&
-      odds <= 1.20
-    ) {
-      quality += 4;
-    }
-
-    /*
-     * Slight preference for odds
-     * closer to 1.20, because this
-     * reduces the number of legs
-     * needed to build the target.
-     */
-
-    if (
-      odds >= 1.15 &&
-      odds <= 1.20
-    ) {
-      quality += 3;
-    }
-  }
-
-
-  /*
-   * Aggressive prefers higher odds.
-   */
-
-  if (
-    strategy === "aggressive"
-  ) {
-
-    if (
-      odds >= 1.50 &&
-      odds <= 3.50
-    ) {
-      quality += 5;
-    }
-
-    if (
-      odds > 3.50
-    ) {
-      quality += 2;
-    }
-  }
-
-
-  return quality;
-}
-
-
-/* =========================
-   PREPARE POOL
-========================= */
+/*
+ * ============================================
+ * PREPARE CANDIDATES
+ * ============================================
+ */
 
 function prepareCandidates(
   candidates,
-  strategy = "balanced"
+  strategy
 ) {
 
-  const sorted =
-    [...candidates].sort(
-      (a, b) =>
-        candidateQuality(
-          b,
-          strategy
-        ) -
-        candidateQuality(
-          a,
-          strategy
-        )
-    );
+  const scored =
+    candidates
+      .map(selection => ({
+
+        ...selection,
+
+        quality:
+          scoreSelection(
+            selection,
+            strategy
+          )
+
+      }))
+      .filter(
+        selection =>
+          selection.quality > 0
+      );
 
 
   /*
-   * Conservative may need many
-   * different events.
-   *
-   * Keep a larger pool.
+   * Sort strongest first.
    */
 
-  const MAX_POOL =
+  scored.sort(
+    (a, b) =>
+      b.quality -
+      a.quality
+  );
+
+
+  /*
+   * Keep the search lightweight.
+   */
+
+  const limit =
     strategy === "conservative"
-      ? 500
-      : 300;
+      ? 600
+      : 450;
 
 
-  const pool = [];
+  return scored.slice(
+    0,
+    limit
+  );
 
-  const eventCounts =
-    new Map();
+}
 
 
-  for (
-    const candidate of sorted
+/*
+ * ============================================
+ * COMBINATION QUALITY
+ * ============================================
+ */
+
+function combinationQuality(
+  state,
+  target,
+  strategy
+) {
+
+  if (
+    !state ||
+    !Array.isArray(
+      state.selections
+    )
   ) {
 
-    if (
-      pool.length >=
-      MAX_POOL
-    ) {
-      break;
-    }
+    return -Infinity;
 
-
-    const key =
-      eventKey(candidate);
-
-    const count =
-      eventCounts.get(key) ||
-      0;
-
-
-    if (
-      count >= 3
-    ) {
-      continue;
-    }
-
-
-    pool.push(candidate);
-
-    eventCounts.set(
-      key,
-      count + 1
-    );
   }
 
 
+  const totalOdds =
+    state.totalOdds;
+
+
+  const difference =
+    Math.abs(
+      Math.log(
+        totalOdds /
+        target
+      )
+    );
+
+
+  const averageQuality =
+    state.selections.length
+      ? state.selections.reduce(
+          (
+            sum,
+            selection
+          ) =>
+            sum +
+            selection.quality,
+          0
+        ) /
+        state.selections.length
+      : 0;
+
+
+  let score =
+    averageQuality -
+    difference * 150;
+
+
   /*
-   * Higher-odds candidates are useful
-   * for balanced/aggressive strategies.
+   * Conservative deliberately does NOT
+   * punish long tickets.
    *
-   * Conservative does not need them
-   * because its max odds are already
-   * capped at 1.20.
+   * The strategy determines the number
+   * of selections required.
    */
-
-  let higherOdds = [];
-
 
   if (
     strategy !== "conservative"
   ) {
 
-    higherOdds =
-      [...candidates]
-        .filter(
-          selection =>
-            Number(selection.odds) >=
-            1.50
-        )
-        .sort(
-          (a, b) =>
-            candidateQuality(
-              b,
-              strategy
-            ) -
-            candidateQuality(
-              a,
-              strategy
-            )
-        )
-        .slice(0, 150);
-  }
-
-
-  const combined = [
-    ...pool,
-    ...higherOdds
-  ];
-
-
-  /*
-   * Remove exact duplicates.
-   */
-
-  const unique =
-    new Map();
-
-
-  for (
-    const candidate
-    of combined
-  ) {
-
-    const key =
-      [
-        candidate.eventId,
-        candidate.marketId,
-        candidate.specifier || "",
-        candidate.outcomeId
-      ].join("|");
-
-
     if (
-      !unique.has(key)
+      state.selections.length > 12
     ) {
-      unique.set(
-        key,
-        candidate
-      );
+
+      score -=
+        (
+          state.selections.length -
+          12
+        ) * 2;
+
     }
+
   }
 
 
-  return [
-    ...unique.values()
-  ];
+  return score;
+
 }
 
 
-/* =========================
-   COMBINATION QUALITY
-========================= */
-
-function combinationQuality(
-  state,
-  target,
-  strategy = "balanced"
-) {
-
-  if (
-    !state.selections.length
-  ) {
-    return 999999;
-  }
-
-
-  const ratio =
-    state.totalOdds /
-    target;
-
-
-  const distance =
-    Math.abs(
-      Math.log(ratio)
-    );
-
-
-  const averageStrength =
-    state.selections.reduce(
-      (sum, selection) =>
-        sum +
-        scoreSelection(
-          selection,
-          strategy
-        ),
-      0
-    ) /
-    state.selections.length;
-
-
-  const lowOddsCount =
-    state.selections.filter(
-      selection =>
-        Number(selection.odds) <
-        1.20
-    ).length;
-
-
-  const weakCount =
-    state.selections.filter(
-      selection =>
-        scoreSelection(
-          selection,
-          strategy
-        ) < 70
-    ).length;
-
-
-  let penalty =
-    0;
-
-
-  /*
-   * Conservative:
-   *
-   * Do not punish the engine for
-   * needing many selections.
-   */
-
-  if (
-    strategy === "conservative"
-  ) {
-
-    penalty =
-      weakCount * 1.5;
-
-  } else {
-
-    /*
-     * Balanced/aggressive:
-     * modest penalty for long tickets.
-     */
-
-    penalty =
-      weakCount * 2 +
-      Math.max(
-        0,
-        state.selections.length - 8
-      ) * 0.50;
-  }
-
-
-  /*
-   * Conservative should strongly
-   * prioritize reaching the target
-   * while staying inside its odds cap.
-   */
-
-  if (
-    strategy === "conservative"
-  ) {
-
-    return (
-      distance * 200 -
-      averageStrength * 1.05 +
-      penalty
-    );
-  }
-
-
-  return (
-    distance * 200 -
-    averageStrength * 1.10 +
-    lowOddsCount * 2 +
-    penalty
-  );
-}
-
-
-/* =========================
-   BUILD COMBINATION
-========================= */
+/*
+ * ============================================
+ * BUILD COMBINATION
+ * ============================================
+ */
 
 function buildCombination(
   candidates,
   target,
-  options = {}
+  options
 ) {
-
-  if (
-    !candidates.length ||
-    !Number.isFinite(target) ||
-    target <= 1
-  ) {
-    return null;
-  }
-
 
   const strategy =
     options.strategy ||
     "balanced";
 
 
-  const maxSelections =
-    Number(
-      options.maxSelections ??
-      15
+  const maxLegs =
+    Math.max(
+      1,
+      Math.floor(
+        options.maxSelections
+      )
     );
 
-
-  const pool =
-    prepareCandidates(
-      candidates,
-      strategy
-    );
-
-
-  /*
-   * Allow a very small overshoot.
-   */
 
   const upperTarget =
     target * 1.05;
 
 
   /*
-   * Lightweight state limit.
+   * Keep beam small enough for Render.
    */
 
-  const STATE_LIMIT =
+  const beamSize =
     strategy === "conservative"
-      ? 150
-      : 120;
+      ? 180
+      : 140;
 
 
   /*
-   * IMPORTANT:
-   *
-   * There is NO artificial 15-leg
-   * ceiling anymore.
-   *
-   * The strategy's maxSelections
-   * is now the actual limit.
+   * Initial state.
    */
 
-  const maxLegs =
-    Math.max(
-      1,
-      Math.floor(
-        maxSelections
-      )
-    );
-
-
   let states = [
-
     {
       totalOdds: 1,
-
       selections: [],
-
-      usedEvents:
-        new Set(),
-
-      marketCounts:
-        new Map()
+      eventIds: new Set(),
+      marketCounts: new Map()
     }
-
   ];
 
 
-  let bestState =
-    null;
-
+  /*
+   * Process candidates.
+   */
 
   for (
-    let depth = 0;
-    depth < maxLegs;
-    depth++
+    const candidate
+    of candidates
   ) {
 
-    const next = [];
+    const nextStates =
+      [];
 
 
     for (
-      const state of states
+      const state
+      of states
     ) {
 
-      for (
-        const candidate of pool
+      /*
+       * Never use the same event twice.
+       */
+
+      if (
+        state.eventIds.has(
+          candidate.eventId
+        )
       ) {
 
-        const key =
-          eventKey(candidate);
+        continue;
 
-
-        /*
-         * One selection per match.
-         */
-
-        if (
-          state.usedEvents.has(key)
-        ) {
-          continue;
-        }
-
-
-        const family =
-          marketFamily(
-            candidate
-          );
-
-
-        const familyCount =
-          state.marketCounts.get(
-            family
-          ) || 0;
-
-
-        /*
-         * Prevent one market family
-         * from dominating the ticket.
-         */
-
-        if (
-          familyCount >= 4
-        ) {
-          continue;
-        }
-
-
-        const odds =
-          Number(candidate.odds);
-
-
-        const total =
-          state.totalOdds *
-          odds;
-
-
-        if (
-          !Number.isFinite(total) ||
-          total > upperTarget
-        ) {
-          continue;
-        }
-
-
-        const usedEvents =
-          new Set(
-            state.usedEvents
-          );
-
-        usedEvents.add(key);
-
-
-        const marketCounts =
-          new Map(
-            state.marketCounts
-          );
-
-        marketCounts.set(
-          family,
-          familyCount + 1
-        );
-
-
-        const newState = {
-
-          totalOdds:
-            total,
-
-          selections: [
-            ...state.selections,
-            candidate
-          ],
-
-          usedEvents,
-
-          marketCounts
-        };
-
-
-        next.push(
-          newState
-        );
-
-
-        /*
-         * Track best state.
-         */
-
-        if (
-          !bestState ||
-          combinationQuality(
-            newState,
-            target,
-            strategy
-          ) <
-          combinationQuality(
-            bestState,
-            target,
-            strategy
-          )
-        ) {
-
-          bestState =
-            newState;
-        }
       }
-    }
 
 
-    if (
-      !next.length
-    ) {
-      break;
+      /*
+       * Maximum four selections
+       * from the same market family.
+       */
+
+      const marketKey =
+        String(
+          candidate.marketId ||
+          candidate.market ||
+          ""
+        );
+
+
+      const marketCount =
+        state.marketCounts.get(
+          marketKey
+        ) || 0;
+
+
+      if (
+        marketCount >= 4
+      ) {
+
+        continue;
+
+      }
+
+
+      /*
+       * Calculate new total.
+       */
+
+      const newTotal =
+        state.totalOdds *
+        candidate.odds;
+
+
+      /*
+       * Never go too far above target.
+       */
+
+      if (
+        newTotal >
+        upperTarget
+      ) {
+
+        continue;
+
+      }
+
+
+      /*
+       * Add candidate.
+       */
+
+      const newSelections =
+        [
+          ...state.selections,
+          candidate
+        ];
+
+
+      if (
+        newSelections.length >
+        maxLegs
+      ) {
+
+        continue;
+
+      }
+
+
+      const newEventIds =
+        new Set(
+          state.eventIds
+        );
+
+
+      newEventIds.add(
+        candidate.eventId
+      );
+
+
+      const newMarketCounts =
+        new Map(
+          state.marketCounts
+        );
+
+
+      newMarketCounts.set(
+        marketKey,
+        marketCount + 1
+      );
+
+
+      nextStates.push({
+
+        totalOdds:
+          newTotal,
+
+        selections:
+          newSelections,
+
+        eventIds:
+          newEventIds,
+
+        marketCounts:
+          newMarketCounts
+
+      });
+
     }
 
 
     /*
-     * Sort generated states.
+     * Keep previous states too.
      */
 
-    next.sort(
+    nextStates.push(
+      ...states
+    );
+
+
+    /*
+     * Score states.
+     */
+
+    nextStates.sort(
       (a, b) =>
         combinationQuality(
-          a,
+          b,
           target,
           strategy
         ) -
         combinationQuality(
-          b,
+          a,
           target,
           strategy
         )
@@ -1323,268 +948,146 @@ function buildCombination(
 
 
     /*
-     * Keep only the best state
-     * for each odds bucket + depth.
+     * Remove duplicate totals.
      */
 
-    const selected = [];
+    const unique =
+      [];
 
-    const buckets =
+    const seen =
       new Set();
 
 
     for (
-      const state of next
+      const state
+      of nextStates
     ) {
 
       const bucket =
-        Math.round(
-          state.totalOdds * 100
-        ) / 100;
+        (
+          Math.round(
+            state.totalOdds *
+            100
+          ) / 100
+        ).toFixed(2);
 
 
-      const signature =
-        `${state.selections.length}|${bucket}`;
+      const key =
+        `${bucket}:${state.selections.length}`;
 
 
       if (
-        buckets.has(signature)
+        seen.has(key)
       ) {
+
         continue;
+
       }
 
 
-      buckets.add(signature);
+      seen.add(key);
 
-      selected.push(state);
+      unique.push(
+        state
+      );
 
 
       if (
-        selected.length >=
-        STATE_LIMIT
+        unique.length >=
+        beamSize
       ) {
+
         break;
+
       }
+
     }
 
 
     states =
-      selected;
+      unique;
 
 
     /*
-     * Stop when we have a very close
-     * target with adequate strength.
+     * Exact-enough result.
      */
 
+    const exact =
+      states.find(
+        state =>
+          state.totalOdds >=
+            target &&
+          Math.abs(
+            state.totalOdds -
+            target
+          ) <=
+            Math.max(
+              0.01,
+              target * 0.01
+            )
+      );
+
+
     if (
-      bestState
+      exact
     ) {
 
-      const difference =
-        Math.abs(
-          bestState.totalOdds -
-          target
-        );
+      return exact;
 
-
-      const averageStrength =
-        bestState.selections.reduce(
-          (sum, selection) =>
-            sum +
-            scoreSelection(
-              selection,
-              strategy
-            ),
-          0
-        ) /
-        bestState.selections.length;
-
-
-      if (
-        difference <=
-          target * 0.005 &&
-        averageStrength >=
-          (
-            strategy === "aggressive"
-              ? 65
-              : 68
-          )
-      ) {
-        break;
-      }
     }
-  }
 
-
-  if (
-    !bestState ||
-    !bestState.selections.length
-  ) {
-    return null;
   }
 
 
   /*
-   * IMPORTANT:
-   *
-   * Never return a combination
-   * above the configured max odds.
-   *
-   * Candidate filtering already guarantees
-   * this, but this extra check protects
-   * against future changes.
+   * Choose the best final state
+   * that actually reaches the target.
    */
 
-  const invalidSelection =
-    bestState.selections.some(
-      selection =>
-        Number(selection.odds) <
-          Number(options.minOdds) ||
-        Number(selection.odds) >
-          Number(options.maxOdds)
+  const validStates =
+    states.filter(
+      state =>
+        state.totalOdds >=
+          target &&
+        state.selections.length <=
+          maxLegs
     );
 
 
   if (
-    invalidSelection
+    !validStates.length
   ) {
+
     return null;
+
   }
 
 
-  /*
-   * Finalize output.
-   */
-
-  const selections =
-    bestState.selections.map(
-      selection => {
-
-        const strength =
-          scoreSelection(
-            selection,
-            strategy
-          );
-
-
-        const bookmakerProbability =
-          getImpliedProbability(
-            selection
-          );
-
-
-        return {
-
-          ...selection,
-
-          bookmakerProbability:
-            Number(
-              (
-                bookmakerProbability *
-                100
-              ).toFixed(2)
-            ),
-
-          impliedProbability:
-            Number(
-              (
-                bookmakerProbability *
-                100
-              ).toFixed(2)
-            ),
-
-          strengthScore:
-            strength,
-
-          risk:
-            getRisk(
-              strength
-            )
-        };
-      }
-    );
-
-
-  const averageStrength =
-    selections.reduce(
-      (sum, selection) =>
-        sum +
-        selection.strengthScore,
-      0
-    ) /
-    selections.length;
-
-
-  const lowOddsSelections =
-    selections.filter(
-      selection =>
-        Number(selection.odds) <
-        1.20
-    ).length;
-
-
-  return {
-
-    totalOdds:
-      Number(
-        bestState.totalOdds.toFixed(2)
-      ),
-
-    targetOdds:
-      Number(
-        target.toFixed(2)
-      ),
-
-    difference:
-      Number(
-        (
-          bestState.totalOdds -
-          target
-        ).toFixed(2)
-      ),
-
-    selectionCount:
-      selections.length,
-
-    averageStrength:
-      Number(
-        averageStrength.toFixed(2)
-      ),
-
-    lowOddsSelections,
-
-    selections
-  };
-}
-
-
-/* =========================
-   SORT CANDIDATES
-========================= */
-
-function sortCandidates(
-  candidates,
-  strategy = "balanced"
-) {
-
-  return [...candidates].sort(
+  validStates.sort(
     (a, b) =>
-      candidateQuality(
+      combinationQuality(
         b,
+        target,
         strategy
       ) -
-      candidateQuality(
+      combinationQuality(
         a,
+        target,
         strategy
       )
   );
+
+
+  return validStates[0];
+
 }
 
 
-/* =========================
-   MAIN ENGINE
-========================= */
+/*
+ * ============================================
+ * PUBLIC ENGINE
+ * ============================================
+ */
 
 export function runSelectionEngine(
   items,
@@ -1592,78 +1095,119 @@ export function runSelectionEngine(
   options = {}
 ) {
 
-  const settings = {
+  const strategy =
+    String(
+      options.strategy ||
+      "balanced"
+    )
+      .trim()
+      .toLowerCase();
 
-    strategy:
-      options.strategy ??
-      "balanced",
 
-    minOdds:
-      options.minOdds ??
-      1.15,
+  const defaults =
+    getStrategyConfig(
+      strategy
+    );
 
-    maxOdds:
-      options.maxOdds ??
-      3.5,
 
-    minProbability:
-      options.minProbability ??
-      0.55,
+  const minOdds =
+    toNumber(
+      options.minOdds,
+      defaults.minOdds
+    );
 
-    minStrength:
-      options.minStrength ??
-      60,
 
-    maxSelections:
-      options.maxSelections ??
-      15
-  };
+  const maxOdds =
+    toNumber(
+      options.maxOdds,
+      defaults.maxOdds
+    );
+
+
+  const minProbability =
+    toNumber(
+      options.minProbability,
+      defaults.minProbability
+    );
+
+
+  const minStrength =
+    toNumber(
+      options.minStrength,
+      defaults.minStrength
+    );
+
+
+  const maxSelections =
+    Math.floor(
+      toNumber(
+        options.maxSelections,
+        defaults.maxSelections
+      )
+    );
 
 
   /*
-   * Normalize strategy.
+   * ==========================================
+   * HARD SAFETY VALIDATION
+   * ==========================================
    */
 
-  const validStrategies = [
-    "conservative",
-    "balanced",
-    "aggressive",
-    "custom"
-  ];
-
-
   if (
-    !validStrategies.includes(
-      settings.strategy
-    )
+    strategy === "conservative" &&
+    maxOdds > 1.20
   ) {
-    settings.strategy =
-      "balanced";
+
+    return {
+
+      success: false,
+
+      error:
+        "Conservative strategy cannot use odds above 1.20.",
+
+      engineVersion:
+        ENGINE_VERSION,
+
+      strategy,
+
+      strategyConfig: {
+
+        minOdds,
+
+        maxOdds: 1.20,
+
+        minProbability,
+
+        minStrength,
+
+        maxSelections
+
+      }
+
+    };
+
   }
 
 
-  /*
-   * Ensure numeric limits.
-   */
+  if (
+    minOdds >= maxOdds
+  ) {
 
-  settings.minOdds =
-    Number(settings.minOdds);
+    return {
 
-  settings.maxOdds =
-    Number(settings.maxOdds);
+      success: false,
 
-  settings.minProbability =
-    Number(settings.minProbability);
+      error:
+        "Invalid odds range.",
 
-  settings.minStrength =
-    Number(settings.minStrength);
+      engineVersion:
+        ENGINE_VERSION,
 
-  settings.maxSelections =
-    Number(settings.maxSelections);
+      strategy
 
+    };
 
-  const numericTarget =
-    Number(target);
+  }
 
 
   const candidates =
@@ -1675,92 +1219,276 @@ export function runSelectionEngine(
   const filtered =
     filterCandidates(
       candidates,
-      settings
+      {
+
+        minOdds,
+
+        maxOdds,
+
+        minProbability,
+
+        minStrength
+
+      }
     );
 
+
+  const prepared =
+    prepareCandidates(
+      filtered,
+      strategy
+    );
+
+
+  /*
+   * Build combination.
+   */
 
   const combination =
     buildCombination(
-      filtered,
-      numericTarget,
-      settings
+      prepared,
+      target,
+      {
+
+        strategy,
+
+        minOdds,
+
+        maxOdds,
+
+        maxSelections
+
+      }
     );
 
 
-  const topCandidates =
-    sortCandidates(
-      filtered,
-      settings.strategy
-    )
-      .slice(0, 20)
-      .map(
-        selection => {
+  /*
+   * No valid combination.
+   */
 
-          const strength =
-            scoreSelection(
-              selection,
-              settings.strategy
-            );
+  if (
+    !combination
+  ) {
+
+    return {
+
+      success: false,
+
+      engineVersion:
+        ENGINE_VERSION,
+
+      strategy,
+
+      strategyConfig: {
+
+        minOdds,
+
+        maxOdds,
+
+        minProbability,
+
+        minStrength,
+
+        maxSelections
+
+      },
+
+      candidatesFound:
+        candidates.length,
+
+      candidatesAfterFiltering:
+        filtered.length,
+
+      targetOdds:
+        target,
+
+      error:
+        `Unable to reach ${target}x within the ${strategy} strategy constraints. Try a higher target, another strategy, or adjust the custom odds range.`
+
+    };
+
+  }
 
 
-          const probability =
-            getImpliedProbability(
-              selection
-            );
+  /*
+   * ==========================================
+   * FINAL HARD VALIDATION
+   * ==========================================
+   */
+
+  const invalidSelection =
+    combination.selections.find(
+      selection => {
+
+        const odds =
+          toNumber(
+            selection.odds
+          );
+
+        return (
+          odds < minOdds ||
+          odds > maxOdds
+        );
+
+      }
+    );
 
 
-          return {
+  if (
+    invalidSelection
+  ) {
 
-            ...selection,
+    return {
 
-            bookmakerProbability:
-              Number(
-                (
-                  probability *
-                  100
-                ).toFixed(2)
-              ),
+      success: false,
 
-            impliedProbability:
-              Number(
-                (
-                  probability *
-                  100
-                ).toFixed(2)
-              ),
+      engineVersion:
+        ENGINE_VERSION,
 
-            strengthScore:
-              strength,
+      strategy,
 
-            risk:
-              getRisk(
-                strength
-              )
-          };
-        }
-      );
+      error:
+        "Engine validation failed: combination contains an odds value outside the requested strategy range."
+
+    };
+
+  }
+
+
+  /*
+   * Calculate statistics.
+   */
+
+  const totalOdds =
+    Number(
+      combination.totalOdds.toFixed(2)
+    );
+
+
+  const difference =
+    Number(
+      Math.abs(
+        totalOdds -
+        target
+      ).toFixed(2)
+    );
+
+
+  const averageStrength =
+    combination.selections.length
+      ? Number(
+          (
+            combination.selections.reduce(
+              (
+                sum,
+                selection
+              ) =>
+                sum +
+                selection.strengthScore,
+              0
+            ) /
+            combination.selections.length
+          ).toFixed(2)
+        )
+      : 0;
+
+
+  const lowOddsSelections =
+    combination.selections.filter(
+      selection =>
+        selection.odds < 1.20
+    ).length;
+
+
+  /*
+   * Return clean combination.
+   */
+
+  const cleanSelections =
+    combination.selections.map(
+      selection => ({
+
+        eventId:
+          selection.eventId,
+
+        gameId:
+          selection.gameId,
+
+        match:
+          selection.match,
+
+        homeTeam:
+          selection.homeTeam,
+
+        awayTeam:
+          selection.awayTeam,
+
+        startTime:
+          selection.startTime,
+
+        competition:
+          selection.competition,
+
+        category:
+          selection.category,
+
+        marketId:
+          selection.marketId,
+
+        market:
+          selection.market,
+
+        specifier:
+          selection.specifier,
+
+        outcomeId:
+          selection.outcomeId,
+
+        pick:
+          selection.pick,
+
+        odds:
+          selection.odds,
+
+        probability:
+          selection.probability,
+
+        bookmakerProbability:
+          selection.bookmakerProbability,
+
+        impliedProbability:
+          selection.impliedProbability,
+
+        strengthScore:
+          selection.strengthScore,
+
+        risk:
+          selection.risk
+
+      })
+    );
 
 
   return {
 
-    success:
-      Boolean(
-        combination
-      ),
+    success: true,
 
-    strategy:
-      settings.strategy,
+    engineVersion:
+      ENGINE_VERSION,
+
+    strategy,
 
     strategyConfig: {
 
-      minOdds:
-        settings.minOdds,
+      minOdds,
 
-      maxOdds:
-        settings.maxOdds,
+      maxOdds,
 
-      maxSelections:
-        settings.maxSelections
+      minProbability,
+
+      minStrength,
+
+      maxSelections
 
     },
 
@@ -1771,10 +1499,29 @@ export function runSelectionEngine(
       filtered.length,
 
     targetOdds:
-      numericTarget,
+      target,
 
-    combination,
+    combination: {
 
-    topCandidates
+      totalOdds,
+
+      targetOdds:
+        target,
+
+      difference,
+
+      selectionCount:
+        cleanSelections.length,
+
+      averageStrength,
+
+      lowOddsSelections,
+
+      selections:
+        cleanSelections
+
+    }
+
   };
+
 }
