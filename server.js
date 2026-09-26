@@ -1,533 +1,132 @@
+import express from "express";
 
-app.get("/selection-engine", async (req, res) => {
+const app = express();
 
-  try {
+app.use(express.json());
 
-    const target =
-      Number(
-        req.query.target || 100
-      );
+const PORT = process.env.PORT || 10000;
 
+const SPORTYBET_BASE =
+  "https://www.sportybet.com";
 
-    if (
-      !Number.isFinite(target) ||
-     target <= 1
-    ) {
-
-      return res.status(400).json({
-
-        success: false,
-
-        error:
-          "Target odds must be greater than 1."
-
-      });
-
-    }
-
-
-    /*
-     * =========================
-     * STRATEGY
-     * =========================
-     */
-
-    const requestedStrategy =
-      String(
-        req.query.strategy ||
-        "balanced"
-      ).trim().toLowerCase();
-
-
-    const validStrategies = [
-      "conservative",
-      "balanced",
-      "aggressive",
-      "custom"
-    ];
-
-
-    if (
-      !validStrategies.includes(
-        requestedStrategy
-      )
-    ) {
-
-      return res.status(400).json({
-
-        success: false,
-
-        error:
-          "Invalid strategy. Use conservative, balanced, aggressive, or custom."
-
-      });
-
-    }
-
-
-    let strategy =
-      requestedStrategy;
-
-
-    let strategyConfig;
-
-
-    /*
-     * =========================
-     * CONSERVATIVE
-     * =========================
-     *
-     * HARD MAXIMUM = 1.20
-     */
-
-    if (
-      strategy === "conservative"
-    ) {
-
-      strategyConfig = {
-
-        minOdds: 1.01,
-
-        maxOdds: 1.20,
-
-        minProbability: 0.55,
-
-        minStrength: 60,
-
-        maxSelections: 50
-
-      };
-
-    }
-
-
-    /*
-     * =========================
-     * BALANCED
-     * =========================
-     */
-
-    else if (
-      strategy === "balanced"
-    ) {
-
-      strategyConfig = {
-
-        minOdds: 1.15,
-
-        maxOdds: 3.50,
-
-        minProbability: 0.55,
-
-        minStrength: 60,
-
-        maxSelections: 15
-
-      };
-
-    }
-
-
-    /*
-     * =========================
-     * AGGRESSIVE
-     * =========================
-     */
-
-    else if (
-      strategy === "aggressive"
-    ) {
-
-      strategyConfig = {
-
-        minOdds: 1.50,
-
-        maxOdds: 5.00,
-
-        minProbability: 0.45,
-
-        minStrength: 45,
-
-        maxSelections: 15
-
-      };
-
-    }
-
-
-    /*
-     * =========================
-     * CUSTOM
-     * =========================
-     */
-
-    else {
-
-      const customMin =
-        Number(
-          req.query.minOdds ||
-          1.01
-        );
-
-
-      const customMax =
-        Number(
-          req.query.maxOdds ||
-          3.50
-        );
-
-
-      const customMaxSelections =
-        Number(
-          req.query.maxSelections ||
-          30
-        );
-
-
-      if (
-        !Number.isFinite(customMin) ||
-        !Number.isFinite(customMax) ||
-        !Number.isFinite(customMaxSelections) ||
-        customMin < 1.01 ||
-        customMax <= customMin ||
-        customMaxSelections < 1
-      ) {
-
-        return res.status(400).json({
-
-          success: false,
-
-          error:
-            "Invalid custom strategy parameters."
-
-        });
-
-      }
-
-
-      strategyConfig = {
-
-        minOdds:
-          customMin,
-
-        maxOdds:
-          customMax,
-
-        minProbability:
-          0.55,
-
-        minStrength:
-          60,
-
-        maxSelections:
-          Math.floor(
-            customMaxSelections
-          )
-
-      };
-
-    }
-
-
-    /*
-     * =========================
-     * CACHE
-     * =========================
-     *
-     * IMPORTANT:
-     * Different strategies must
-     * never share the same cache.
-     */
-const includeCandidates =
-  String(
-    req.query.includeCandidates ||
-    ""
-  ).toLowerCase() === "true";
-
-const cacheKey = [
-
-  target,
-
-  strategy,
-
-  strategyConfig.minOdds,
-
-  strategyConfig.maxOdds,
-
-  strategyConfig.maxSelections,
-
-  includeCandidates
-
-].join(":");
-
-
-const cached =
-  selectionCache.get(
-    cacheKey
-  );
-
-
-if (
-  cached &&
-  Date.now() -
-    cached.timestamp <
-    SELECTION_CACHE_TTL_MS
-) {
-
-  return res.json({
-
-    ...cached.data,
-
-    cached: true
-
+app.get("/", (req, res) => {
+  res.json({
+    status: "online",
+    service: "SportyBet Slip Optimizer API"
   });
-
-}
-
-    /*
-     * =========================
-     * FETCH SPORTYBET DATA
-     * =========================
-     */
-
-    const pageNumbers =
-      Array.from(
-        {
-          length:
-            MAX_EVENT_SEARCH_PAGES
-        },
-        (_, index) =>
-          index + 1
-      );
-
-
-    const pageData =
-      await Promise.all(
-
-        pageNumbers.map(
-          pageNum =>
-            fetchUpcomingEventsPage(
-              pageNum,
-              false
-            ).catch(
-              error => {
-
-                console.error(
-                  `Selection page ${pageNum} failed:`,
-                  error.message
-                );
-
-                return null;
-
-              }
-            )
-        )
-
-      );
-
-
-    /*
-     * =========================
-     * BUILD PAGE RESULTS
-     * =========================
-     */
-
-    const pageResults = [];
-
-
-    for (
-      const data of pageData
-    ) {
-
-      if (!data) {
-        continue;
-      }
-
-
-      const tournaments =
-        getTournaments(data);
-
-
-      for (
-        const tournament
-        of tournaments
-      ) {
-
-        const competition =
-          tournament?.name ||
-          tournament?.tournamentName ||
-          "";
-
-
-        if (
-          !isAllowedCompetition(
-            competition
-          )
-        ) {
-
-          continue;
-
-        }
-
-
-        const events =
-          Array.isArray(
-            tournament.events
-          )
-            ? tournament.events
-            : [];
-
-
-        for (
-          const event of events
-        ) {
-
-          const cleaned =
-            cleanEventMarkets({
-
-              event,
-
-              tournament
-
-            });
-
-
-          if (
-            cleaned
-          ) {
-
-            pageResults.push(
-              cleaned
-            );
-
-          }
-
-        }
-
-      }
-
-    }
-
-
-    /*
-     * =========================
-     * RUN ENGINE
-     * =========================
-     */
-
-    const engine =
-      runSelectionEngine(
-        pageResults,
-        target,
-        {
-
-          strategy,
-
-          minOdds:
-            strategyConfig.minOdds,
-
-          maxOdds:
-            strategyConfig.maxOdds,
-
-          minProbability:
-            strategyConfig.minProbability,
-
-          minStrength:
-            strategyConfig.minStrength,
-
-          maxSelections:
-            strategyConfig.maxSelections,
-
-          tolerance: 0.20
-
-        }
-      );
-
-
-    /*
-     * =========================
-     * RESPONSE
-     * =========================
-     */
-
-    const response = {
-
-      success:
-        engine.success,
-
-      generatedAt:
-        new Date().toISOString(),
-
-      strategy,
-
-      strategyConfig: {
-
-        minOdds:
-          strategyConfig.minOdds,
-
-        maxOdds:
-          strategyConfig.maxOdds,
-
-        maxSelections:
-          strategyConfig.maxSelections
-
-      },
-
-      competitions:
-        ALLOWED_COMPETITIONS,
-
-      targetOdds:
-        target,
-
-      ...engine
-
-    };
-
-
-    selectionCache.set(
-
-      cacheKey,
-
-      {
-
-        timestamp:
-          Date.now(),
-
-        data:
-          response
-
-      }
-
-    );
-
-
-    res.json({
-
-      ...response,
-
-      cached: false
-
+});
+
+app.get("/booking/:code", async (req, res) => {
+  const code = String(req.params.code || "")
+    .trim()
+    .toUpperCase();
+
+  if (!/^[A-Z0-9]{4,20}$/.test(code)) {
+    return res.status(400).json({
+      error: "Invalid SportyBet booking code."
     });
-
-
-  } catch (error) {
-
-    console.error(
-      "Selection engine error:",
-      error
-    );
-
-
-    res.status(500).json({
-
-      success: false,
-
-      error:
-        error.message ||
-        "Selection engine failed."
-
-    });
-
   }
 
+  const url =
+    `${SPORTYBET_BASE}/api/ng/orders/share/${encodeURIComponent(code)}`;
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Accept": "application/json",
+        "Current-Country": "NG"
+      }
+    });
+
+    const raw = await response.text();
+
+    console.log(
+      "SportyBet status:",
+      response.status
+    );
+
+    console.log(
+      "Response length:",
+      raw.length
+    );
+
+    if (!response.ok) {
+      return res.status(502).json({
+        error: `SportyBet returned HTTP ${response.status}.`
+      });
+    }
+
+    let data;
+
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      return res.status(502).json({
+        error: "SportyBet returned a non-JSON response."
+      });
+    }
+
+    const booking = data?.data;
+
+    if (!booking) {
+      return res.status(404).json({
+        error: "No booking data was returned."
+      });
+    }
+
+    const outcomes = Array.isArray(booking.outcomes)
+      ? booking.outcomes
+      : [];
+
+    const selections = outcomes.map((item) => ({
+      event:
+        item.homeTeamName && item.awayTeamName
+          ? `${item.homeTeamName} vs ${item.awayTeamName}`
+          : item.eventName || "Unknown match",
+
+      market:
+        item.marketDesc ||
+        item.marketName ||
+        "Unknown market",
+
+      pick:
+        item.selectedOutcome ||
+        item.selectedOutcomeName ||
+        item.outcomeName ||
+        item.outcome ||
+        "Unknown pick",
+
+      odds:
+        item.odds !== undefined
+          ? Number(item.odds)
+          : null
+    }));
+
+    return res.json({
+      shareCode:
+        booking.shareCode || code,
+
+      shareURL:
+        booking.shareURL || null,
+
+      deadline:
+        booking.deadline || null,
+
+      selections
+    });
+
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      error: "Unable to connect to SportyBet."
+    });
+  }
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(
+    `SportyBet API running on port ${PORT}`
+  );
 });
