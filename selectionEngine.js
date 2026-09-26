@@ -1,6 +1,6 @@
 /* =========================================================
    SPORTYBET SELECTION ENGINE
-   LIGHTWEIGHT QUALITY OPTIMIZER
+   STRATEGY-AWARE LIGHTWEIGHT QUALITY OPTIMIZER
 ========================================================= */
 
 
@@ -47,7 +47,9 @@ function isAllowedCompetition(name) {
 ========================= */
 
 function getEventInfo(item) {
-  const event = item?.event || {};
+
+  const event =
+    item?.event || {};
 
   const competition =
     event.competition ||
@@ -61,6 +63,7 @@ function getEventInfo(item) {
     "";
 
   return {
+
     eventId:
       event.eventId || "",
 
@@ -412,7 +415,10 @@ function getMarketAdjustment(selection) {
    ODDS QUALITY
 ========================= */
 
-function getOddsQuality(selection) {
+function getOddsQuality(
+  selection,
+  strategy = "balanced"
+) {
 
   const odds =
     Number(selection.odds);
@@ -420,6 +426,64 @@ function getOddsQuality(selection) {
   if (!Number.isFinite(odds)) {
     return -20;
   }
+
+
+  /*
+   * Conservative mode:
+   *
+   * Do NOT penalize low odds.
+   *
+   * The whole purpose of this strategy
+   * is to allow smaller individual odds.
+   */
+
+  if (
+    strategy === "conservative"
+  ) {
+
+    if (odds <= 1.20) {
+      return 3;
+    }
+
+    return -20;
+  }
+
+
+  /*
+   * Aggressive mode:
+   *
+   * Give more room to higher odds.
+   */
+
+  if (
+    strategy === "aggressive"
+  ) {
+
+    if (
+      odds >= 1.50 &&
+      odds <= 3.50
+    ) {
+      return 5;
+    }
+
+    if (
+      odds > 3.50 &&
+      odds <= 5.00
+    ) {
+      return 3;
+    }
+
+    if (odds < 1.30) {
+      return -4;
+    }
+
+    return 0;
+  }
+
+
+  /*
+   * Balanced mode.
+   */
 
   if (odds < 1.17) {
     return -8;
@@ -455,7 +519,10 @@ function getOddsQuality(selection) {
    STRENGTH SCORE
 ========================= */
 
-function scoreSelection(selection) {
+function scoreSelection(
+  selection,
+  strategy = "balanced"
+) {
 
   const probability =
     getImpliedProbability(
@@ -472,19 +539,32 @@ function scoreSelection(selection) {
 
   score +=
     getOddsQuality(
-      selection
+      selection,
+      strategy
     );
 
   const odds =
     Number(selection.odds);
 
-  if (odds >= 4) {
-    score -= 10;
+
+  /*
+   * Only apply large odds penalties
+   * outside conservative mode.
+   */
+
+  if (
+    strategy !== "conservative"
+  ) {
+
+    if (odds >= 4) {
+      score -= 10;
+    }
+
+    if (odds >= 6) {
+      score -= 15;
+    }
   }
 
-  if (odds >= 6) {
-    score -= 15;
-  }
 
   return Math.max(
     1,
@@ -536,13 +616,23 @@ function filterCandidates(
 
       const score =
         scoreSelection(
-          selection
+          selection,
+          options.strategy
         );
 
       const market =
         normalize(
           selection.market
         );
+
+
+      /*
+       * HARD ODDS LIMIT
+       *
+       * This guarantees that a strategy
+       * can never silently exceed its
+       * configured maximum odds.
+       */
 
       if (
         odds < options.minOdds ||
@@ -551,6 +641,7 @@ function filterCandidates(
         return false;
       }
 
+
       if (
         probability <
         options.minProbability
@@ -558,12 +649,18 @@ function filterCandidates(
         return false;
       }
 
+
       if (
         score <
         options.minStrength
       ) {
         return false;
       }
+
+
+      /*
+       * Avoid very high-variance markets.
+       */
 
       if (
         market.includes(
@@ -573,6 +670,7 @@ function filterCandidates(
         return false;
       }
 
+
       if (
         market.includes(
           "half time/full time"
@@ -580,6 +678,7 @@ function filterCandidates(
       ) {
         return false;
       }
+
 
       return true;
     }
@@ -591,11 +690,15 @@ function filterCandidates(
    CANDIDATE QUALITY
 ========================= */
 
-function candidateQuality(selection) {
+function candidateQuality(
+  selection,
+  strategy = "balanced"
+) {
 
   const strength =
     scoreSelection(
-      selection
+      selection,
+      strategy
     );
 
   const odds =
@@ -604,20 +707,75 @@ function candidateQuality(selection) {
   let quality =
     strength;
 
+
+  /*
+   * Balanced prefers useful
+   * middle-range odds.
+   */
+
   if (
+    strategy === "balanced" &&
     odds >= 1.30 &&
     odds <= 2.50
   ) {
     quality += 5;
   }
 
-  if (odds < 1.20) {
-    quality -= 8;
+
+  /*
+   * Conservative prefers the
+   * lower-odds range.
+   */
+
+  if (
+    strategy === "conservative"
+  ) {
+
+    if (
+      odds >= 1.10 &&
+      odds <= 1.20
+    ) {
+      quality += 4;
+    }
+
+    /*
+     * Slight preference for odds
+     * closer to 1.20, because this
+     * reduces the number of legs
+     * needed to build the target.
+     */
+
+    if (
+      odds >= 1.15 &&
+      odds <= 1.20
+    ) {
+      quality += 3;
+    }
   }
 
-  if (odds < 1.17) {
-    quality -= 5;
+
+  /*
+   * Aggressive prefers higher odds.
+   */
+
+  if (
+    strategy === "aggressive"
+  ) {
+
+    if (
+      odds >= 1.50 &&
+      odds <= 3.50
+    ) {
+      quality += 5;
+    }
+
+    if (
+      odds > 3.50
+    ) {
+      quality += 2;
+    }
   }
+
 
   return quality;
 }
@@ -628,31 +786,35 @@ function candidateQuality(selection) {
 ========================= */
 
 function prepareCandidates(
-  candidates
+  candidates,
+  strategy = "balanced"
 ) {
-
-  /*
-   * Sort by quality.
-   */
 
   const sorted =
     [...candidates].sort(
       (a, b) =>
-        candidateQuality(b) -
-        candidateQuality(a)
+        candidateQuality(
+          b,
+          strategy
+        ) -
+        candidateQuality(
+          a,
+          strategy
+        )
     );
 
 
   /*
-   * Keep a manageable pool.
+   * Conservative may need many
+   * different events.
    *
-   * This is deliberately much smaller
-   * than the previous 900+ candidate
-   * beam-search pool.
+   * Keep a larger pool.
    */
 
   const MAX_POOL =
-    300;
+    strategy === "conservative"
+      ? 500
+      : 300;
 
 
   const pool = [];
@@ -672,6 +834,7 @@ function prepareCandidates(
       break;
     }
 
+
     const key =
       eventKey(candidate);
 
@@ -679,9 +842,13 @@ function prepareCandidates(
       eventCounts.get(key) ||
       0;
 
-    if (count >= 3) {
+
+    if (
+      count >= 3
+    ) {
       continue;
     }
+
 
     pool.push(candidate);
 
@@ -693,22 +860,41 @@ function prepareCandidates(
 
 
   /*
-   * Add some higher-odds selections
-   * so 50x and 100x remain possible.
+   * Higher-odds candidates are useful
+   * for balanced/aggressive strategies.
+   *
+   * Conservative does not need them
+   * because its max odds are already
+   * capped at 1.20.
    */
 
-  const higherOdds =
-    [...candidates]
-      .filter(
-        selection =>
-          Number(selection.odds) >= 1.50
-      )
-      .sort(
-        (a, b) =>
-          candidateQuality(b) -
-          candidateQuality(a)
-      )
-      .slice(0, 150);
+  let higherOdds = [];
+
+
+  if (
+    strategy !== "conservative"
+  ) {
+
+    higherOdds =
+      [...candidates]
+        .filter(
+          selection =>
+            Number(selection.odds) >=
+            1.50
+        )
+        .sort(
+          (a, b) =>
+            candidateQuality(
+              b,
+              strategy
+            ) -
+            candidateQuality(
+              a,
+              strategy
+            )
+        )
+        .slice(0, 150);
+  }
 
 
   const combined = [
@@ -738,6 +924,7 @@ function prepareCandidates(
         candidate.outcomeId
       ].join("|");
 
+
     if (
       !unique.has(key)
     ) {
@@ -761,7 +948,8 @@ function prepareCandidates(
 
 function combinationQuality(
   state,
-  target
+  target,
+  strategy = "balanced"
 ) {
 
   if (
@@ -786,7 +974,10 @@ function combinationQuality(
     state.selections.reduce(
       (sum, selection) =>
         sum +
-        scoreSelection(selection),
+        scoreSelection(
+          selection,
+          strategy
+        ),
       0
     ) /
     state.selections.length;
@@ -803,25 +994,70 @@ function combinationQuality(
   const weakCount =
     state.selections.filter(
       selection =>
-        scoreSelection(selection) <
-        70
+        scoreSelection(
+          selection,
+          strategy
+        ) < 70
     ).length;
 
 
+  let penalty =
+    0;
+
+
   /*
-   * We still want target accuracy,
-   * but quality matters more now.
+   * Conservative:
+   *
+   * Do not punish the engine for
+   * needing many selections.
    */
+
+  if (
+    strategy === "conservative"
+  ) {
+
+    penalty =
+      weakCount * 1.5;
+
+  } else {
+
+    /*
+     * Balanced/aggressive:
+     * modest penalty for long tickets.
+     */
+
+    penalty =
+      weakCount * 2 +
+      Math.max(
+        0,
+        state.selections.length - 8
+      ) * 0.50;
+  }
+
+
+  /*
+   * Conservative should strongly
+   * prioritize reaching the target
+   * while staying inside its odds cap.
+   */
+
+  if (
+    strategy === "conservative"
+  ) {
+
+    return (
+      distance * 200 -
+      averageStrength * 1.05 +
+      penalty
+    );
+  }
+
 
   return (
     distance * 200 -
     averageStrength * 1.10 +
     lowOddsCount * 2 +
-    weakCount * 2 +
-    Math.max(
-      0,
-      state.selections.length - 8
-    ) * 0.50
+    penalty
   );
 }
 
@@ -833,7 +1069,7 @@ function combinationQuality(
 function buildCombination(
   candidates,
   target,
-  maxSelections = 15
+  options = {}
 ) {
 
   if (
@@ -845,14 +1081,27 @@ function buildCombination(
   }
 
 
+  const strategy =
+    options.strategy ||
+    "balanced";
+
+
+  const maxSelections =
+    Number(
+      options.maxSelections ??
+      15
+    );
+
+
   const pool =
     prepareCandidates(
-      candidates
+      candidates,
+      strategy
     );
 
 
   /*
-   * Maximum allowed odds.
+   * Allow a very small overshoot.
    */
 
   const upperTarget =
@@ -860,29 +1109,48 @@ function buildCombination(
 
 
   /*
-   * Instead of an expensive beam search,
-   * maintain only the best combinations
-   * after each level.
+   * Lightweight state limit.
    */
 
   const STATE_LIMIT =
-    120;
+    strategy === "conservative"
+      ? 150
+      : 120;
 
+
+  /*
+   * IMPORTANT:
+   *
+   * There is NO artificial 15-leg
+   * ceiling anymore.
+   *
+   * The strategy's maxSelections
+   * is now the actual limit.
+   */
 
   const maxLegs =
-    Math.min(
-      maxSelections,
-      15
+    Math.max(
+      1,
+      Math.floor(
+        maxSelections
+      )
     );
 
 
   let states = [
+
     {
       totalOdds: 1,
+
       selections: [],
-      usedEvents: new Set(),
-      marketCounts: new Map()
+
+      usedEvents:
+        new Set(),
+
+      marketCounts:
+        new Map()
     }
+
   ];
 
 
@@ -911,6 +1179,10 @@ function buildCombination(
           eventKey(candidate);
 
 
+        /*
+         * One selection per match.
+         */
+
         if (
           state.usedEvents.has(key)
         ) {
@@ -929,6 +1201,11 @@ function buildCombination(
             family
           ) || 0;
 
+
+        /*
+         * Prevent one market family
+         * from dominating the ticket.
+         */
 
         if (
           familyCount >= 4
@@ -995,25 +1272,26 @@ function buildCombination(
 
 
         /*
-         * Track the best result.
+         * Track best state.
          */
 
         if (
           !bestState ||
           combinationQuality(
             newState,
-            target
+            target,
+            strategy
           ) <
           combinationQuality(
             bestState,
-            target
+            target,
+            strategy
           )
         ) {
 
           bestState =
             newState;
         }
-
       }
     }
 
@@ -1026,26 +1304,27 @@ function buildCombination(
 
 
     /*
-     * Sort all generated states
-     * and keep only the best ones.
+     * Sort generated states.
      */
 
     next.sort(
       (a, b) =>
         combinationQuality(
           a,
-          target
+          target,
+          strategy
         ) -
         combinationQuality(
           b,
-          target
+          target,
+          strategy
         )
     );
 
 
     /*
-     * Remove states with almost
-     * identical odds totals.
+     * Keep only the best state
+     * for each odds bucket + depth.
      */
 
     const selected = [];
@@ -1094,9 +1373,8 @@ function buildCombination(
 
 
     /*
-     * If we have an excellent target
-     * match with reasonable strength,
-     * stop.
+     * Stop when we have a very close
+     * target with adequate strength.
      */
 
     if (
@@ -1114,7 +1392,10 @@ function buildCombination(
         bestState.selections.reduce(
           (sum, selection) =>
             sum +
-            scoreSelection(selection),
+            scoreSelection(
+              selection,
+              strategy
+            ),
           0
         ) /
         bestState.selections.length;
@@ -1124,7 +1405,11 @@ function buildCombination(
         difference <=
           target * 0.005 &&
         averageStrength >=
-          70
+          (
+            strategy === "aggressive"
+              ? 65
+              : 68
+          )
       ) {
         break;
       }
@@ -1141,6 +1426,34 @@ function buildCombination(
 
 
   /*
+   * IMPORTANT:
+   *
+   * Never return a combination
+   * above the configured max odds.
+   *
+   * Candidate filtering already guarantees
+   * this, but this extra check protects
+   * against future changes.
+   */
+
+  const invalidSelection =
+    bestState.selections.some(
+      selection =>
+        Number(selection.odds) <
+          Number(options.minOdds) ||
+        Number(selection.odds) >
+          Number(options.maxOdds)
+    );
+
+
+  if (
+    invalidSelection
+  ) {
+    return null;
+  }
+
+
+  /*
    * Finalize output.
    */
 
@@ -1150,8 +1463,10 @@ function buildCombination(
 
         const strength =
           scoreSelection(
-            selection
+            selection,
+            strategy
           );
+
 
         const bookmakerProbability =
           getImpliedProbability(
@@ -1249,13 +1564,20 @@ function buildCombination(
 ========================= */
 
 function sortCandidates(
-  candidates
+  candidates,
+  strategy = "balanced"
 ) {
 
   return [...candidates].sort(
     (a, b) =>
-      candidateQuality(b) -
-      candidateQuality(a)
+      candidateQuality(
+        b,
+        strategy
+      ) -
+      candidateQuality(
+        a,
+        strategy
+      )
   );
 }
 
@@ -1271,6 +1593,10 @@ export function runSelectionEngine(
 ) {
 
   const settings = {
+
+    strategy:
+      options.strategy ??
+      "balanced",
 
     minOdds:
       options.minOdds ??
@@ -1294,6 +1620,48 @@ export function runSelectionEngine(
   };
 
 
+  /*
+   * Normalize strategy.
+   */
+
+  const validStrategies = [
+    "conservative",
+    "balanced",
+    "aggressive",
+    "custom"
+  ];
+
+
+  if (
+    !validStrategies.includes(
+      settings.strategy
+    )
+  ) {
+    settings.strategy =
+      "balanced";
+  }
+
+
+  /*
+   * Ensure numeric limits.
+   */
+
+  settings.minOdds =
+    Number(settings.minOdds);
+
+  settings.maxOdds =
+    Number(settings.maxOdds);
+
+  settings.minProbability =
+    Number(settings.minProbability);
+
+  settings.minStrength =
+    Number(settings.minStrength);
+
+  settings.maxSelections =
+    Number(settings.maxSelections);
+
+
   const numericTarget =
     Number(target);
 
@@ -1315,13 +1683,14 @@ export function runSelectionEngine(
     buildCombination(
       filtered,
       numericTarget,
-      settings.maxSelections
+      settings
     );
 
 
   const topCandidates =
     sortCandidates(
-      filtered
+      filtered,
+      settings.strategy
     )
       .slice(0, 20)
       .map(
@@ -1329,8 +1698,10 @@ export function runSelectionEngine(
 
           const strength =
             scoreSelection(
-              selection
+              selection,
+              settings.strategy
             );
+
 
           const probability =
             getImpliedProbability(
@@ -1376,6 +1747,22 @@ export function runSelectionEngine(
       Boolean(
         combination
       ),
+
+    strategy:
+      settings.strategy,
+
+    strategyConfig: {
+
+      minOdds:
+        settings.minOdds,
+
+      maxOdds:
+        settings.maxOdds,
+
+      maxSelections:
+        settings.maxSelections
+
+    },
 
     candidatesFound:
       candidates.length,
