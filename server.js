@@ -360,7 +360,6 @@ async function findEventsAcrossPages(
   return found;
 }
 
-
 /* =========================
    CLEAN EVENT MARKETS
 ========================= */
@@ -371,117 +370,226 @@ function cleanEventMarkets(found) {
   }
 
   const event = found.event;
-  const tournament =
-    found.tournament || {};
+  const tournament = found.tournament || {};
+
+  /* -------------------------
+     TEAM NAMES
+  ------------------------- */
 
   const homeTeamName =
-    event?.homeTeam?.name ||
     event?.homeTeamName ||
+    event?.homeTeam?.name ||
     event?.competitors?.[0]?.name ||
     "";
 
   const awayTeamName =
-    event?.awayTeam?.name ||
     event?.awayTeamName ||
+    event?.awayTeam?.name ||
     event?.competitors?.[1]?.name ||
     "";
 
+
+  /* -------------------------
+     EVENT IDs
+  ------------------------- */
+
   const eventId =
-    event?.id ||
     event?.eventId ||
+    event?.id ||
     "";
 
   const gameId =
     event?.gameId ||
-    event?.id ||
     "";
 
+
+  /* -------------------------
+     START TIME
+  ------------------------- */
+
   const startTime =
-    event?.startTime ||
-    event?.start_time ||
+    event?.estimateStartTime ??
+    event?.startTime ??
+    event?.start_time ??
     null;
 
+
+  /* -------------------------
+     COMPETITION
+  ------------------------- */
+
+  const competition =
+    event?.sport?.category?.tournament?.name ||
+    tournament?.name ||
+    tournament?.tournamentName ||
+    "";
+
+
+  /* -------------------------
+     CATEGORY
+  ------------------------- */
+
   const category =
+    event?.sport?.category?.name ||
     tournament?.category?.name ||
     tournament?.categoryName ||
     "";
 
+
+  /* -------------------------
+     MARKETS
+  ------------------------- */
+
   const markets =
-    Array.isArray(event.markets)
+    Array.isArray(event?.markets)
       ? event.markets
       : [];
 
+
   const cleanedMarkets =
     markets.map(market => {
+
       const outcomes =
-        Array.isArray(market.outcomes)
+        Array.isArray(market?.outcomes)
           ? market.outcomes
           : [];
 
+
       return {
+
+        /* Market ID */
+
         marketId:
           String(
-            market.marketId ||
-            market.id ||
+            market?.id ??
+            market?.marketId ??
             ""
           ),
 
+
+        /* Market name */
+
         market:
-          market.market ||
-          market.name ||
+          market?.name ||
+          market?.desc ||
+          market?.market ||
           "",
 
+
+        /* Market specifier */
+
         specifier:
-          market.specifier ||
+          market?.specifier ??
           null,
 
+
+        /* Outcomes */
+
         outcomes:
-          outcomes.map(outcome => ({
-            outcomeId:
-              String(
-                outcome.outcomeId ||
-                outcome.id ||
-                ""
-              ),
+          outcomes.map(outcome => {
 
-            pick:
-              outcome.pick ||
-              outcome.name ||
-              "",
-
-            odds:
+            const odds =
               Number(
-                outcome.odds ||
-                outcome.price ||
+                outcome?.odds ??
+                outcome?.price ??
                 0
-              ),
+              );
 
-            isActive:
-              outcome.isActive !== false
-          }))
+
+            const probabilityValue =
+              Number(
+                outcome?.probability
+              );
+
+
+            return {
+
+              /* Outcome ID */
+
+              outcomeId:
+                String(
+                  outcome?.id ??
+                  outcome?.outcomeId ??
+                  ""
+                ),
+
+
+              /* Selection name */
+
+              pick:
+                outcome?.desc ||
+                outcome?.pick ||
+                outcome?.name ||
+                "",
+
+
+              /* Odds */
+
+              odds:
+                Number.isFinite(odds)
+                  ? odds
+                  : 0,
+
+
+              /* SportyBet probability */
+
+              probability:
+                Number.isFinite(
+                  probabilityValue
+                )
+                  ? probabilityValue
+                  : null,
+
+
+              /* Active status */
+
+              isActive:
+                outcome?.isActive !== 0 &&
+                outcome?.isActive !== false
+
+            };
+
+          })
+
       };
+
     });
 
+
+  /* -------------------------
+     FINAL CLEAN OBJECT
+  ------------------------- */
+
   return {
+
     event: {
+
       eventId,
+
       gameId,
 
       homeTeamName,
+
       awayTeamName,
 
       startTime,
 
+      competition,
+
       tournament,
 
       category
+
     },
 
     markets:
       cleanedMarkets
+
   };
 }
 
+    
+      
 
 /* =========================
    HEALTH
