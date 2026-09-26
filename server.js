@@ -1742,7 +1742,66 @@ app.get(
 /* =========================================================
    START SERVER
 ========================================================= */
+app.get("/selection-debug", async (req, res) => {
+  try {
+    const data = await fetchUpcomingEventsPage(1, false);
 
+    const tournaments = getTournaments(data);
+
+    const result = [];
+
+    for (const tournament of tournaments) {
+      const competition =
+        tournament?.name ||
+        tournament?.tournamentName ||
+        "";
+
+      if (!isAllowedCompetition(competition)) {
+        continue;
+      }
+
+      const events = Array.isArray(tournament.events)
+        ? tournament.events
+        : [];
+
+      for (const event of events.slice(0, 3)) {
+        result.push({
+          competition,
+          eventKeys: Object.keys(event || {}),
+          eventSample: event,
+          marketsType: Array.isArray(event?.markets)
+            ? "array"
+            : typeof event?.markets,
+          marketsCount: Array.isArray(event?.markets)
+            ? event.markets.length
+            : 0,
+          firstMarket:
+            Array.isArray(event?.markets) &&
+            event.markets.length
+              ? event.markets[0]
+              : null
+        });
+      }
+
+      if (result.length >= 3) {
+        break;
+      }
+    }
+
+    res.json({
+      success: true,
+      tournamentsFound: tournaments.length,
+      matchingEvents: result.length,
+      data: result
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
 app.listen(
   PORT,
   () => {
