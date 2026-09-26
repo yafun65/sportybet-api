@@ -4,6 +4,11 @@ function normalize(value) {
     .toLowerCase();
 }
 
+
+/* =========================
+   ALLOWED COMPETITIONS
+========================= */
+
 const ALLOWED_COMPETITIONS = [
   "Premier League",
   "La Liga",
@@ -16,6 +21,7 @@ const ALLOWED_COMPETITIONS = [
   "UEFA Nations League"
 ];
 
+
 function isAllowedCompetition(name) {
   const value = normalize(name);
 
@@ -27,7 +33,7 @@ function isAllowedCompetition(name) {
 
 
 /* =========================
-   GET EVENT INFORMATION
+   EVENT INFORMATION
 ========================= */
 
 function getEventInfo(item) {
@@ -130,13 +136,11 @@ function extractCandidates(items) {
         const odds =
           Number(outcome.odds);
 
-        /*
-         * SportyBet uses:
-         * isActive: 1
-         *
-         * If the field is missing, we
-         * don't automatically reject it.
-         */
+        const probability =
+          Number(
+            outcome.probability
+          );
+
         const active =
           outcome.isActive !== false &&
           outcome.isActive !== 0;
@@ -198,7 +202,12 @@ function extractCandidates(items) {
 
           pick,
 
-          odds
+          odds,
+
+          probability:
+            Number.isFinite(probability)
+              ? probability
+              : null
         });
       }
     }
@@ -209,112 +218,172 @@ function extractCandidates(items) {
 
 
 /* =========================
-   SCORE SELECTION
+   IMPLIED PROBABILITY
 ========================= */
 
-function scoreSelection(selection) {
+function getImpliedProbability(selection) {
+
+  if (
+    Number.isFinite(
+      selection.probability
+    ) &&
+    selection.probability > 0 &&
+    selection.probability <= 1
+  ) {
+    return selection.probability;
+  }
 
   const odds =
     Number(selection.odds);
 
-  if (!Number.isFinite(odds)) {
+  if (
+    !Number.isFinite(odds) ||
+    odds <= 1
+  ) {
     return 0;
   }
 
-  /*
-   * Lower odds generally imply
-   * higher bookmaker-implied probability.
-   *
-   * This is NOT a guarantee of winning.
-   */
-  let score =
-    (1 / odds) * 100;
+  return 1 / odds;
+}
+
+
+/* =========================
+   MARKET BONUS
+========================= */
+
+function getMarketAdjustment(selection) {
 
   const market =
     normalize(selection.market);
+
+  let adjustment = 0;
 
 
   if (
     market.includes("double chance")
   ) {
-    score += 10;
-  }
-
-
-  if (
-    market.includes("over/under")
-  ) {
-    score += 8;
+    adjustment += 4;
   }
 
 
   if (
     market.includes("draw no bet")
   ) {
-    score += 8;
+    adjustment += 3;
   }
 
 
   if (
-    market.includes("gg/ng")
+    market.includes("over/under")
   ) {
-    score += 6;
+    adjustment += 2;
   }
 
 
   if (
     market.includes("asian handicap")
   ) {
-    score += 5;
+    adjustment += 2;
   }
 
 
   if (
-    market.includes("1x2 - 2up")
+    market.includes("gg/ng")
   ) {
-    score += 5;
+    adjustment += 1;
   }
 
 
-  /*
-   * Corners market support.
-   */
   if (
     market.includes("corners")
   ) {
-    score += 5;
+    adjustment += 2;
   }
 
-
-  /*
-   * Higher-risk markets.
-   */
 
   if (
     market.includes("correct score")
   ) {
-    score -= 35;
+    adjustment -= 25;
   }
 
 
   if (
-    market.includes("half time/full time")
+    market.includes(
+      "half time/full time"
+    )
   ) {
-    score -= 20;
+    adjustment -= 15;
   }
 
 
-  if (odds >= 5) {
-    score -= 20;
+  return adjustment;
+}
 
-  } else if (odds >= 3) {
+
+/* =========================
+   SELECTION STRENGTH
+========================= */
+
+function scoreSelection(selection) {
+
+  const probability =
+    getImpliedProbability(
+      selection
+    );
+
+  /*
+   * Probability is converted
+   * to a 0-100 scale.
+   */
+  let score =
+    probability * 100;
+
+
+  /*
+   * Small reward for useful
+   * odds range.
+   */
+  const odds =
+    Number(selection.odds);
+
+
+  if (
+    odds >= 1.25 &&
+    odds <= 2.50
+  ) {
+    score += 3;
+  }
+
+
+  /*
+   * Market adjustment.
+   */
+  score +=
+    getMarketAdjustment(
+      selection
+    );
+
+
+  /*
+   * Penalize very high odds.
+   */
+  if (odds >= 4) {
     score -= 10;
+  }
+
+
+  if (odds >= 6) {
+    score -= 15;
   }
 
 
   return Math.max(
     1,
-    Math.min(95, score)
+    Math.min(
+      95,
+      Math.round(score)
+    )
   );
 }
 
@@ -325,20 +394,20 @@ function scoreSelection(selection) {
 
 function getRisk(score) {
 
-  if (score >= 75) {
+  if (score >= 82) {
     return "Lower";
   }
 
-  if (score >= 60) {
+  if (score >= 70) {
     return "Moderate";
   }
 
-  return "High";
+  return "Higher";
 }
 
 
 /* =========================
-   FILTER
+   FILTER CANDIDATES
 ========================= */
 
 function filterCandidates(
@@ -352,11 +421,20 @@ function filterCandidates(
       const odds =
         Number(selection.odds);
 
+      const probability =
+        getImpliedProbability(
+          selection
+        );
+
       const score =
-        scoreSelection(selection);
+        scoreSelection(
+          selection
+        );
 
       const market =
-        normalize(selection.market);
+        normalize(
+          selection.market
+        );
 
 
       if (
@@ -368,19 +446,31 @@ function filterCandidates(
 
 
       if (
-        score < options.minConfidence
+        probability <
+        options.minProbability
       ) {
         return false;
       }
 
 
-      /*
-       * Remove extremely
-       * high-variance markets.
-       */
+      if (
+        score <
+        options.minStrength
+      ) {
+        return false;
+      }
+
 
       if (
-        market.includes("correct score") ||
+        market.includes(
+          "correct score"
+        )
+      ) {
+        return false;
+      }
+
+
+      if (
         market.includes(
           "half time/full time"
         )
@@ -399,12 +489,28 @@ function filterCandidates(
    SORT
 ========================= */
 
-function sortCandidates(candidates) {
+function sortCandidates(
+  candidates
+) {
 
   return [...candidates].sort(
-    (a, b) =>
-      scoreSelection(b) -
-      scoreSelection(a)
+    (a, b) => {
+
+      const scoreDifference =
+        scoreSelection(b) -
+        scoreSelection(a);
+
+      if (
+        scoreDifference !== 0
+      ) {
+        return scoreDifference;
+      }
+
+      return (
+        Number(b.odds) -
+        Number(a.odds)
+      );
+    }
   );
 }
 
@@ -424,7 +530,58 @@ function eventKey(selection) {
 
 
 /* =========================
-   BUILD COMBINATION
+   MARKET FAMILY
+========================= */
+
+function marketFamily(selection) {
+
+  const market =
+    normalize(
+      selection.market
+    );
+
+  if (
+    market.includes("double chance")
+  ) {
+    return "double-chance";
+  }
+
+  if (
+    market.includes("over/under")
+  ) {
+    return "over-under";
+  }
+
+  if (
+    market.includes("draw no bet")
+  ) {
+    return "draw-no-bet";
+  }
+
+  if (
+    market.includes("gg/ng")
+  ) {
+    return "gg-ng";
+  }
+
+  if (
+    market.includes("asian handicap")
+  ) {
+    return "asian-handicap";
+  }
+
+  if (
+    market.includes("corners")
+  ) {
+    return "corners";
+  }
+
+  return market || "other";
+}
+
+
+/* =========================
+   COMBINATION OPTIMIZER
 ========================= */
 
 function buildCombination(
@@ -433,17 +590,27 @@ function buildCombination(
   maxSelections = 15
 ) {
 
-  if (!candidates.length) {
+  if (
+    !candidates.length ||
+    !Number.isFinite(target) ||
+    target <= 1
+  ) {
     return null;
   }
 
 
   const sorted =
-    sortCandidates(candidates);
+    sortCandidates(
+      candidates
+    );
 
 
   const usedEvents =
     new Set();
+
+
+  const marketCounts =
+    new Map();
 
 
   const selections = [];
@@ -452,7 +619,30 @@ function buildCombination(
   let totalOdds = 1;
 
 
-  for (const candidate of sorted) {
+  /*
+   * We don't want the algorithm
+   * to simply select 15 identical
+   * 1.15 Double Chance picks.
+   */
+  const MAX_SAME_MARKET =
+    Math.max(
+      3,
+      Math.ceil(
+        maxSelections * 0.35
+      )
+    );
+
+
+  /*
+   * Dynamic upper limit.
+   */
+  const upperTarget =
+    target * 1.08;
+
+
+  for (
+    const candidate of sorted
+  ) {
 
     if (
       selections.length >=
@@ -466,13 +656,28 @@ function buildCombination(
       eventKey(candidate);
 
 
-    /*
-     * Never select two markets
-     * from the same match.
-     */
-
     if (
       usedEvents.has(key)
+    ) {
+      continue;
+    }
+
+
+    const family =
+      marketFamily(
+        candidate
+      );
+
+
+    const familyCount =
+      marketCounts.get(
+        family
+      ) || 0;
+
+
+    if (
+      familyCount >=
+      MAX_SAME_MARKET
     ) {
       continue;
     }
@@ -483,14 +688,9 @@ function buildCombination(
       Number(candidate.odds);
 
 
-    /*
-     * Don't overshoot target
-     * excessively.
-     */
-
     if (
       newTotal >
-      target * 1.2
+      upperTarget
     ) {
       continue;
     }
@@ -499,9 +699,9 @@ function buildCombination(
     usedEvents.add(key);
 
 
-    const confidence =
-      Math.round(
-        scoreSelection(candidate)
+    const strength =
+      scoreSelection(
+        candidate
       );
 
 
@@ -509,10 +709,22 @@ function buildCombination(
 
       ...candidate,
 
-      confidence,
+      impliedProbability:
+        Number(
+          (
+            getImpliedProbability(
+              candidate
+            ) * 100
+          ).toFixed(2)
+        ),
+
+      strengthScore:
+        strength,
 
       risk:
-        getRisk(confidence)
+        getRisk(
+          strength
+        )
 
     });
 
@@ -521,11 +733,16 @@ function buildCombination(
       newTotal;
 
 
-    /*
-     * Stop once we are
-     * reasonably close to target.
-     */
+    marketCounts.set(
+      family,
+      familyCount + 1
+    );
 
+
+    /*
+     * Stop when we reach
+     * 80% of the requested target.
+     */
     if (
       totalOdds >=
       target * 0.8
@@ -549,6 +766,18 @@ function buildCombination(
         totalOdds.toFixed(2)
       ),
 
+    targetOdds:
+      Number(
+        target.toFixed(2)
+      ),
+
+    difference:
+      Number(
+        (
+          totalOdds - target
+        ).toFixed(2)
+      ),
+
     selections
 
   };
@@ -568,22 +797,36 @@ export function runSelectionEngine(
   const settings = {
 
     minOdds:
-      options.minOdds ?? 1.15,
+      options.minOdds ??
+      1.15,
 
     maxOdds:
-      options.maxOdds ?? 3.5,
+      options.maxOdds ??
+      3.5,
 
-    minConfidence:
-      options.minConfidence ?? 55,
+    minProbability:
+      options.minProbability ??
+      0.55,
+
+    minStrength:
+      options.minStrength ??
+      60,
 
     maxSelections:
-      options.maxSelections ?? 15
+      options.maxSelections ??
+      15
 
   };
 
 
+  const numericTarget =
+    Number(target);
+
+
   const candidates =
-    extractCandidates(items);
+    extractCandidates(
+      items
+    );
 
 
   const filtered =
@@ -596,9 +839,46 @@ export function runSelectionEngine(
   const combination =
     buildCombination(
       filtered,
-      target,
+      numericTarget,
       settings.maxSelections
     );
+
+
+  const topCandidates =
+    sortCandidates(
+      filtered
+    )
+      .slice(0, 20)
+      .map(selection => {
+
+        const strength =
+          scoreSelection(
+            selection
+          );
+
+        return {
+
+          ...selection,
+
+          impliedProbability:
+            Number(
+              (
+                getImpliedProbability(
+                  selection
+                ) * 100
+              ).toFixed(2)
+            ),
+
+          strengthScore:
+            strength,
+
+          risk:
+            getRisk(
+              strength
+            )
+
+        };
+      });
 
 
   return {
@@ -612,27 +892,13 @@ export function runSelectionEngine(
     candidatesAfterFiltering:
       filtered.length,
 
+    targetOdds:
+      numericTarget,
+
     combination,
 
-    topCandidates:
-      sortCandidates(filtered)
-        .slice(0, 20)
-        .map(selection => ({
-
-          ...selection,
-
-          confidence:
-            Math.round(
-              scoreSelection(selection)
-            ),
-
-          risk:
-            getRisk(
-              scoreSelection(selection)
-            )
-
-        }))
+    topCandidates
 
   };
 
-      }
+}
