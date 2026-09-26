@@ -10,7 +10,7 @@ app.get("/selection-engine", async (req, res) => {
 
     if (
       !Number.isFinite(target) ||
-      target <= 1
+     target <= 1
     ) {
 
       return res.status(400).json({
