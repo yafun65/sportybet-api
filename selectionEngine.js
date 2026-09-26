@@ -25,29 +25,59 @@ function isAllowedCompetition(name) {
   );
 }
 
+
+/* =========================
+   GET EVENT INFORMATION
+========================= */
+
 function getEventInfo(item) {
   const event = item?.event || {};
 
+  const competition =
+    event.competition ||
+    event.sport?.category?.tournament?.name ||
+    event.tournament?.name ||
+    "";
+
+  const category =
+    event.category ||
+    event.sport?.category?.name ||
+    "";
+
   return {
-    eventId: event.eventId || "",
-    gameId: event.gameId || "",
+    eventId:
+      event.eventId || "",
+
+    gameId:
+      event.gameId || "",
+
     homeTeam:
       event.homeTeamName || "",
+
     awayTeam:
       event.awayTeamName || "",
+
     startTime:
-      event.startTime || 0,
-    competition:
-      event.competition || "",
-    category:
-      event.category || ""
+      event.startTime ||
+      event.estimateStartTime ||
+      0,
+
+    competition,
+
+    category
   };
 }
+
+
+/* =========================
+   EXTRACT CANDIDATES
+========================= */
 
 function extractCandidates(items) {
   const candidates = [];
 
   for (const item of items) {
+
     const event = getEventInfo(item);
 
     if (
@@ -66,16 +96,29 @@ function extractCandidates(items) {
       continue;
     }
 
-    const markets = Array.isArray(item.markets)
-      ? item.markets
-      : [];
+    const markets =
+      Array.isArray(item.markets)
+        ? item.markets
+        : [];
 
     for (const market of markets) {
+
       const marketId =
-        String(market.marketId || "");
+        String(
+          market.marketId ||
+          market.id ||
+          ""
+        );
 
       const marketName =
-        market.market || "";
+        market.market ||
+        market.name ||
+        market.desc ||
+        "";
+
+      const specifier =
+        market.specifier ||
+        null;
 
       const outcomes =
         Array.isArray(market.outcomes)
@@ -83,26 +126,57 @@ function extractCandidates(items) {
           : [];
 
       for (const outcome of outcomes) {
+
         const odds =
           Number(outcome.odds);
 
+        /*
+         * SportyBet uses:
+         * isActive: 1
+         *
+         * If the field is missing, we
+         * don't automatically reject it.
+         */
+        const active =
+          outcome.isActive !== false &&
+          outcome.isActive !== 0;
+
         if (
-          !outcome.isActive ||
+          !active ||
           !Number.isFinite(odds) ||
           odds <= 1
         ) {
           continue;
         }
 
+        const outcomeId =
+          String(
+            outcome.outcomeId ||
+            outcome.id ||
+            ""
+          );
+
+        const pick =
+          outcome.pick ||
+          outcome.desc ||
+          "";
+
         candidates.push({
-          eventId: event.eventId,
-          gameId: event.gameId,
+
+          eventId:
+            event.eventId,
+
+          gameId:
+            event.gameId,
 
           match:
             `${event.homeTeam} vs ${event.awayTeam}`,
 
-          homeTeam: event.homeTeam,
-          awayTeam: event.awayTeam,
+          homeTeam:
+            event.homeTeam,
+
+          awayTeam:
+            event.awayTeam,
 
           startTime:
             event.startTime,
@@ -114,18 +188,15 @@ function extractCandidates(items) {
             event.category,
 
           marketId,
-          market: marketName,
 
-          specifier:
-            market.specifier || null,
+          market:
+            marketName,
 
-          outcomeId:
-            String(
-              outcome.outcomeId || ""
-            ),
+          specifier,
 
-          pick:
-            outcome.pick || "",
+          outcomeId,
+
+          pick,
 
           odds
         });
@@ -136,18 +207,32 @@ function extractCandidates(items) {
   return candidates;
 }
 
+
+/* =========================
+   SCORE SELECTION
+========================= */
+
 function scoreSelection(selection) {
-  const odds = Number(selection.odds);
+
+  const odds =
+    Number(selection.odds);
 
   if (!Number.isFinite(odds)) {
     return 0;
   }
 
+  /*
+   * Lower odds generally imply
+   * higher bookmaker-implied probability.
+   *
+   * This is NOT a guarantee of winning.
+   */
   let score =
     (1 / odds) * 100;
 
   const market =
     normalize(selection.market);
+
 
   if (
     market.includes("double chance")
@@ -155,11 +240,13 @@ function scoreSelection(selection) {
     score += 10;
   }
 
+
   if (
     market.includes("over/under")
   ) {
     score += 8;
   }
+
 
   if (
     market.includes("draw no bet")
@@ -167,11 +254,13 @@ function scoreSelection(selection) {
     score += 8;
   }
 
+
   if (
     market.includes("gg/ng")
   ) {
     score += 6;
   }
+
 
   if (
     market.includes("asian handicap")
@@ -179,11 +268,27 @@ function scoreSelection(selection) {
     score += 5;
   }
 
+
   if (
     market.includes("1x2 - 2up")
   ) {
     score += 5;
   }
+
+
+  /*
+   * Corners market support.
+   */
+  if (
+    market.includes("corners")
+  ) {
+    score += 5;
+  }
+
+
+  /*
+   * Higher-risk markets.
+   */
 
   if (
     market.includes("correct score")
@@ -191,17 +296,21 @@ function scoreSelection(selection) {
     score -= 35;
   }
 
+
   if (
     market.includes("half time/full time")
   ) {
     score -= 20;
   }
 
+
   if (odds >= 5) {
     score -= 20;
+
   } else if (odds >= 3) {
     score -= 10;
   }
+
 
   return Math.max(
     1,
@@ -209,7 +318,13 @@ function scoreSelection(selection) {
   );
 }
 
+
+/* =========================
+   RISK
+========================= */
+
 function getRisk(score) {
+
   if (score >= 75) {
     return "Lower";
   }
@@ -221,12 +336,19 @@ function getRisk(score) {
   return "High";
 }
 
+
+/* =========================
+   FILTER
+========================= */
+
 function filterCandidates(
   candidates,
   options
 ) {
+
   return candidates.filter(
     selection => {
+
       const odds =
         Number(selection.odds);
 
@@ -236,6 +358,7 @@ function filterCandidates(
       const market =
         normalize(selection.market);
 
+
       if (
         odds < options.minOdds ||
         odds > options.maxOdds
@@ -243,11 +366,18 @@ function filterCandidates(
         return false;
       }
 
+
       if (
         score < options.minConfidence
       ) {
         return false;
       }
+
+
+      /*
+       * Remove extremely
+       * high-variance markets.
+       */
 
       if (
         market.includes("correct score") ||
@@ -258,12 +388,19 @@ function filterCandidates(
         return false;
       }
 
+
       return true;
     }
   );
 }
 
+
+/* =========================
+   SORT
+========================= */
+
 function sortCandidates(candidates) {
+
   return [...candidates].sort(
     (a, b) =>
       scoreSelection(b) -
@@ -271,7 +408,13 @@ function sortCandidates(candidates) {
   );
 }
 
+
+/* =========================
+   EVENT KEY
+========================= */
+
 function eventKey(selection) {
+
   return (
     selection.eventId ||
     selection.gameId ||
@@ -279,26 +422,38 @@ function eventKey(selection) {
   );
 }
 
+
+/* =========================
+   BUILD COMBINATION
+========================= */
+
 function buildCombination(
   candidates,
   target,
   maxSelections = 15
 ) {
+
   if (!candidates.length) {
     return null;
   }
 
+
   const sorted =
     sortCandidates(candidates);
+
 
   const usedEvents =
     new Set();
 
+
   const selections = [];
+
 
   let totalOdds = 1;
 
+
   for (const candidate of sorted) {
+
     if (
       selections.length >=
       maxSelections
@@ -306,16 +461,32 @@ function buildCombination(
       break;
     }
 
+
     const key =
       eventKey(candidate);
 
-    if (usedEvents.has(key)) {
+
+    /*
+     * Never select two markets
+     * from the same match.
+     */
+
+    if (
+      usedEvents.has(key)
+    ) {
       continue;
     }
+
 
     const newTotal =
       totalOdds *
       Number(candidate.odds);
+
+
+    /*
+     * Don't overshoot target
+     * excessively.
+     */
 
     if (
       newTotal >
@@ -324,47 +495,78 @@ function buildCombination(
       continue;
     }
 
+
     usedEvents.add(key);
 
+
+    const confidence =
+      Math.round(
+        scoreSelection(candidate)
+      );
+
+
     selections.push({
+
       ...candidate,
-      confidence:
-        Math.round(
-          scoreSelection(candidate)
-        ),
+
+      confidence,
+
       risk:
-        getRisk(
-          scoreSelection(candidate)
-        )
+        getRisk(confidence)
+
     });
 
-    totalOdds = newTotal;
+
+    totalOdds =
+      newTotal;
+
+
+    /*
+     * Stop once we are
+     * reasonably close to target.
+     */
 
     if (
-      totalOdds >= target * 0.8
+      totalOdds >=
+      target * 0.8
     ) {
       break;
     }
   }
 
-  if (!selections.length) {
+
+  if (
+    !selections.length
+  ) {
     return null;
   }
 
+
   return {
+
     totalOdds:
-      Number(totalOdds.toFixed(2)),
+      Number(
+        totalOdds.toFixed(2)
+      ),
 
     selections
+
   };
 }
+
+
+/* =========================
+   MAIN ENGINE
+========================= */
 
 export function runSelectionEngine(
   items,
   target,
   options = {}
 ) {
+
   const settings = {
+
     minOdds:
       options.minOdds ?? 1.15,
 
@@ -376,16 +578,20 @@ export function runSelectionEngine(
 
     maxSelections:
       options.maxSelections ?? 15
+
   };
+
 
   const candidates =
     extractCandidates(items);
+
 
   const filtered =
     filterCandidates(
       candidates,
       settings
     );
+
 
   const combination =
     buildCombination(
@@ -394,7 +600,9 @@ export function runSelectionEngine(
       settings.maxSelections
     );
 
+
   return {
+
     success:
       Boolean(combination),
 
@@ -410,15 +618,21 @@ export function runSelectionEngine(
       sortCandidates(filtered)
         .slice(0, 20)
         .map(selection => ({
+
           ...selection,
+
           confidence:
             Math.round(
               scoreSelection(selection)
             ),
+
           risk:
             getRisk(
               scoreSelection(selection)
             )
+
         }))
+
   };
-}
+
+      }
