@@ -1,6 +1,6 @@
 /* =========================================================
    SPORTYBET SELECTION ENGINE
-   QUALITY + TARGET OPTIMIZER
+   LIGHTWEIGHT QUALITY OPTIMIZER
 ========================================================= */
 
 
@@ -90,6 +90,7 @@ function getEventInfo(item) {
 ========================= */
 
 function extractCandidates(items) {
+
   const candidates = [];
 
   for (const item of items) {
@@ -152,6 +153,13 @@ function extractCandidates(items) {
             outcome?.price
           );
 
+        if (
+          !Number.isFinite(odds) ||
+          odds <= 1
+        ) {
+          continue;
+        }
+
         const probability =
           Number(
             outcome?.probability
@@ -161,11 +169,7 @@ function extractCandidates(items) {
           outcome?.isActive !== false &&
           outcome?.isActive !== 0;
 
-        if (
-          !active ||
-          !Number.isFinite(odds) ||
-          odds <= 1
-        ) {
+        if (!active) {
           continue;
         }
 
@@ -225,9 +229,7 @@ function extractCandidates(items) {
             Number.isFinite(probability)
               ? probability
               : null
-
         });
-
       }
     }
   }
@@ -237,7 +239,7 @@ function extractCandidates(items) {
 
 
 /* =========================
-   BOOKMAKER PROBABILITY
+   PROBABILITY
 ========================= */
 
 function getImpliedProbability(selection) {
@@ -267,6 +269,83 @@ function getImpliedProbability(selection) {
 
 
 /* =========================
+   MARKET FAMILY
+========================= */
+
+function marketFamily(selection) {
+
+  const market =
+    normalize(
+      selection.market
+    );
+
+  if (
+    market.includes(
+      "double chance"
+    )
+  ) {
+    return "double-chance";
+  }
+
+  if (
+    market.includes(
+      "over/under"
+    )
+  ) {
+    return "over-under";
+  }
+
+  if (
+    market.includes(
+      "draw no bet"
+    )
+  ) {
+    return "draw-no-bet";
+  }
+
+  if (
+    market.includes(
+      "gg/ng"
+    )
+  ) {
+    return "gg-ng";
+  }
+
+  if (
+    market.includes(
+      "asian handicap"
+    )
+  ) {
+    return "asian-handicap";
+  }
+
+  if (
+    market.includes(
+      "corners"
+    )
+  ) {
+    return "corners";
+  }
+
+  return market || "other";
+}
+
+
+/* =========================
+   EVENT KEY
+========================= */
+
+function eventKey(selection) {
+
+  return (
+    selection.eventId ||
+    selection.gameId ||
+    selection.match
+  );
+}
+
+
+/* =========================
    MARKET ADJUSTMENT
 ========================= */
 
@@ -277,60 +356,52 @@ function getMarketAdjustment(selection) {
 
   let adjustment = 0;
 
-  /*
-   * These adjustments are deliberately
-   * modest. Probability remains the
-   * main component of the score.
-   */
-
   if (
-    market.includes("double chance")
+    market.includes(
+      "double chance"
+    )
   ) {
     adjustment += 2;
-  }
-
-  if (
-    market.includes("draw no bet")
-  ) {
-    adjustment += 2;
-  }
-
-  if (
-    market.includes("over/under")
-  ) {
-    adjustment += 1;
-  }
-
-  if (
-    market.includes("asian handicap")
-  ) {
-    adjustment += 1;
-  }
-
-  if (
-    market.includes("gg/ng")
-  ) {
-    adjustment += 1;
-  }
-
-  if (
-    market.includes("corners")
-  ) {
-    adjustment += 1;
-  }
-
-  if (
-    market.includes("correct score")
-  ) {
-    adjustment -= 25;
   }
 
   if (
     market.includes(
-      "half time/full time"
+      "draw no bet"
     )
   ) {
-    adjustment -= 15;
+    adjustment += 2;
+  }
+
+  if (
+    market.includes(
+      "over/under"
+    )
+  ) {
+    adjustment += 1;
+  }
+
+  if (
+    market.includes(
+      "asian handicap"
+    )
+  ) {
+    adjustment += 1;
+  }
+
+  if (
+    market.includes(
+      "gg/ng"
+    )
+  ) {
+    adjustment += 1;
+  }
+
+  if (
+    market.includes(
+      "corners"
+    )
+  ) {
+    adjustment += 1;
   }
 
   return adjustment;
@@ -338,12 +409,10 @@ function getMarketAdjustment(selection) {
 
 
 /* =========================
-   ODDS QUALITY ADJUSTMENT
+   ODDS QUALITY
 ========================= */
 
-function getOddsQualityAdjustment(
-  selection
-) {
+function getOddsQuality(selection) {
 
   const odds =
     Number(selection.odds);
@@ -352,14 +421,8 @@ function getOddsQualityAdjustment(
     return -20;
   }
 
-  /*
-   * Very low odds are useful sometimes,
-   * but we don't want the optimizer to
-   * fill the ticket with 1.15 selections.
-   */
-
   if (odds < 1.17) {
-    return -7;
+    return -8;
   }
 
   if (odds < 1.20) {
@@ -370,27 +433,18 @@ function getOddsQualityAdjustment(
     return -3;
   }
 
-  /*
-   * Practical middle range.
-   */
-
   if (
     odds >= 1.30 &&
     odds <= 2.50
   ) {
-    return 2;
+    return 4;
   }
-
-  /*
-   * Still usable, but slightly less
-   * attractive than the middle range.
-   */
 
   if (
     odds > 2.50 &&
     odds <= 3.50
   ) {
-    return -2;
+    return -1;
   }
 
   return 0;
@@ -398,7 +452,7 @@ function getOddsQualityAdjustment(
 
 
 /* =========================
-   SELECTION STRENGTH
+   STRENGTH SCORE
 ========================= */
 
 function scoreSelection(selection) {
@@ -417,16 +471,12 @@ function scoreSelection(selection) {
     );
 
   score +=
-    getOddsQualityAdjustment(
+    getOddsQuality(
       selection
     );
 
   const odds =
     Number(selection.odds);
-
-  /*
-   * Extra penalty for very high odds.
-   */
 
   if (odds >= 4) {
     score -= 10;
@@ -465,7 +515,7 @@ function getRisk(score) {
 
 
 /* =========================
-   FILTER CANDIDATES
+   FILTER
 ========================= */
 
 function filterCandidates(
@@ -538,88 +588,10 @@ function filterCandidates(
 
 
 /* =========================
-   EVENT KEY
-========================= */
-
-function eventKey(selection) {
-  return (
-    selection.eventId ||
-    selection.gameId ||
-    selection.match
-  );
-}
-
-
-/* =========================
-   MARKET FAMILY
-========================= */
-
-function marketFamily(selection) {
-
-  const market =
-    normalize(
-      selection.market
-    );
-
-  if (
-    market.includes(
-      "double chance"
-    )
-  ) {
-    return "double-chance";
-  }
-
-  if (
-    market.includes(
-      "over/under"
-    )
-  ) {
-    return "over-under";
-  }
-
-  if (
-    market.includes(
-      "draw no bet"
-    )
-  ) {
-    return "draw-no-bet";
-  }
-
-  if (
-    market.includes(
-      "gg/ng"
-    )
-  ) {
-    return "gg-ng";
-  }
-
-  if (
-    market.includes(
-      "asian handicap"
-    )
-  ) {
-    return "asian-handicap";
-  }
-
-  if (
-    market.includes(
-      "corners"
-    )
-  ) {
-    return "corners";
-  }
-
-  return market || "other";
-}
-
-
-/* =========================
    CANDIDATE QUALITY
 ========================= */
 
-function candidateQuality(
-  selection
-) {
+function candidateQuality(selection) {
 
   const strength =
     scoreSelection(
@@ -632,28 +604,19 @@ function candidateQuality(
   let quality =
     strength;
 
-  /*
-   * Encourage useful odds.
-   */
-
   if (
     odds >= 1.30 &&
     odds <= 2.50
   ) {
-    quality += 4;
+    quality += 5;
   }
 
-  /*
-   * Discourage excessive dependence
-   * on very low odds.
-   */
-
   if (odds < 1.20) {
-    quality -= 6;
+    quality -= 8;
   }
 
   if (odds < 1.17) {
-    quality -= 4;
+    quality -= 5;
   }
 
   return quality;
@@ -661,7 +624,7 @@ function candidateQuality(
 
 
 /* =========================
-   PREPARE CANDIDATES
+   PREPARE POOL
 ========================= */
 
 function prepareCandidates(
@@ -669,40 +632,27 @@ function prepareCandidates(
 ) {
 
   /*
-   * Rank by quality rather than simply
-   * bookmaker probability.
+   * Sort by quality.
    */
 
   const sorted =
     [...candidates].sort(
-      (a, b) => {
-
-        const qualityDifference =
-          candidateQuality(b) -
-          candidateQuality(a);
-
-        if (
-          qualityDifference !== 0
-        ) {
-          return qualityDifference;
-        }
-
-        return (
-          Number(b.odds) -
-          Number(a.odds)
-        );
-
-      }
+      (a, b) =>
+        candidateQuality(b) -
+        candidateQuality(a)
     );
 
 
   /*
-   * Larger pool gives the optimizer
-   * enough options for high targets.
+   * Keep a manageable pool.
+   *
+   * This is deliberately much smaller
+   * than the previous 900+ candidate
+   * beam-search pool.
    */
 
   const MAX_POOL =
-    900;
+    300;
 
 
   const pool = [];
@@ -729,13 +679,7 @@ function prepareCandidates(
       eventCounts.get(key) ||
       0;
 
-    /*
-     * Keep several different markets
-     * from an event, but don't let one
-     * event dominate the pool.
-     */
-
-    if (count >= 5) {
+    if (count >= 3) {
       continue;
     }
 
@@ -749,66 +693,32 @@ function prepareCandidates(
 
 
   /*
-   * Add odds diversity.
-   *
-   * This is particularly important
-   * for 50x and 100x targets.
+   * Add some higher-odds selections
+   * so 50x and 100x remain possible.
    */
 
-  const oddsSorted =
+  const higherOdds =
     [...candidates]
-      .sort(
-        (a, b) =>
-          Number(b.odds) -
-          Number(a.odds)
+      .filter(
+        selection =>
+          Number(selection.odds) >= 1.50
       )
-      .slice(0, 250);
-
-
-  /*
-   * Also deliberately collect candidates
-   * from useful odds bands.
-   */
-
-  const oddsBands = [];
-
-  for (
-    const candidate of candidates
-  ) {
-
-    const odds =
-      Number(candidate.odds);
-
-    if (
-      (odds >= 1.20 && odds < 1.35) ||
-      (odds >= 1.35 && odds < 1.60) ||
-      (odds >= 1.60 && odds < 2.00) ||
-      (odds >= 2.00 && odds <= 3.50)
-    ) {
-      oddsBands.push(candidate);
-    }
-  }
-
-
-  const bandSorted =
-    [...oddsBands]
       .sort(
         (a, b) =>
           candidateQuality(b) -
           candidateQuality(a)
       )
-      .slice(0, 400);
+      .slice(0, 150);
 
 
   const combined = [
     ...pool,
-    ...oddsSorted,
-    ...bandSorted
+    ...higherOdds
   ];
 
 
   /*
-   * Remove duplicate selections.
+   * Remove exact duplicates.
    */
 
   const unique =
@@ -828,7 +738,6 @@ function prepareCandidates(
         candidate.outcomeId
       ].join("|");
 
-
     if (
       !unique.has(key)
     ) {
@@ -847,28 +756,20 @@ function prepareCandidates(
 
 
 /* =========================
-   STATE QUALITY
+   COMBINATION QUALITY
 ========================= */
 
-function stateQuality(
+function combinationQuality(
   state,
   target
 ) {
 
   if (
-    !state ||
     !state.selections.length
   ) {
     return 999999;
   }
 
-
-  /*
-   * Target distance.
-   *
-   * Log distance works well across
-   * both 10x and 100x targets.
-   */
 
   const ratio =
     state.totalOdds /
@@ -877,47 +778,19 @@ function stateQuality(
 
   const distance =
     Math.abs(
-      Math.log(
-        ratio
-      )
+      Math.log(ratio)
     );
 
-
-  /*
-   * Average strength.
-   */
 
   const averageStrength =
     state.selections.reduce(
       (sum, selection) =>
         sum +
-        scoreSelection(
-          selection
-        ),
+        scoreSelection(selection),
       0
     ) /
     state.selections.length;
 
-
-  /*
-   * Average candidate quality.
-   */
-
-  const averageQuality =
-    state.selections.reduce(
-      (sum, selection) =>
-        sum +
-        candidateQuality(
-          selection
-        ),
-      0
-    ) /
-    state.selections.length;
-
-
-  /*
-   * Count very-low-odds selections.
-   */
 
   const lowOddsCount =
     state.selections.filter(
@@ -927,61 +800,28 @@ function stateQuality(
     ).length;
 
 
-  /*
-   * Count weaker selections.
-   */
-
   const weakCount =
     state.selections.filter(
       selection =>
-        scoreSelection(
-          selection
-        ) < 70
+        scoreSelection(selection) <
+        70
     ).length;
 
 
   /*
-   * Leg penalty.
-   *
-   * We don't want 15 legs if a
-   * cleaner 8-leg combination can
-   * reach the target.
-   */
-
-  const legPenalty =
-    Math.max(
-      0,
-      state.selections.length - 8
-    ) * 0.20;
-
-
-  /*
-   * Strong penalties for relying
-   * heavily on low-quality legs.
-   */
-
-  const lowOddsPenalty =
-    lowOddsCount * 0.80;
-
-  const weakPenalty =
-    weakCount * 0.65;
-
-
-  /*
-   * IMPORTANT:
-   *
-   * Target accuracy remains important,
-   * but selection quality now has a much
-   * stronger influence than before.
+   * We still want target accuracy,
+   * but quality matters more now.
    */
 
   return (
-    distance * 180 -
-    averageStrength * 0.80 -
-    averageQuality * 0.35 +
-    legPenalty +
-    lowOddsPenalty +
-    weakPenalty
+    distance * 200 -
+    averageStrength * 1.10 +
+    lowOddsCount * 2 +
+    weakCount * 2 +
+    Math.max(
+      0,
+      state.selections.length - 8
+    ) * 0.50
   );
 }
 
@@ -1012,24 +852,22 @@ function buildCombination(
 
 
   /*
-   * Maximum allowed overshoot.
+   * Maximum allowed odds.
    */
 
-  const hardUpperTarget =
+  const upperTarget =
     target * 1.05;
 
 
   /*
-   * Beam search size.
+   * Instead of an expensive beam search,
+   * maintain only the best combinations
+   * after each level.
    */
 
-  const BEAM_SIZE =
-    450;
+  const STATE_LIMIT =
+    120;
 
-
-  /*
-   * Maximum number of legs.
-   */
 
   const maxLegs =
     Math.min(
@@ -1038,11 +876,7 @@ function buildCombination(
     );
 
 
-  /*
-   * Start with empty state.
-   */
-
-  let beam = [
+  let states = [
     {
       totalOdds: 1,
       selections: [],
@@ -1056,40 +890,29 @@ function buildCombination(
     null;
 
 
-  /*
-   * Search progressively.
-   */
-
   for (
     let depth = 0;
     depth < maxLegs;
     depth++
   ) {
 
-    const nextStates = [];
+    const next = [];
 
 
     for (
-      const state of beam
+      const state of states
     ) {
 
       for (
-        const candidate
-        of pool
+        const candidate of pool
       ) {
 
         const key =
           eventKey(candidate);
 
 
-        /*
-         * One selection per event.
-         */
-
         if (
-          state.usedEvents.has(
-            key
-          )
+          state.usedEvents.has(key)
         ) {
           continue;
         }
@@ -1107,11 +930,6 @@ function buildCombination(
           ) || 0;
 
 
-        /*
-         * Maximum four selections
-         * from the same market family.
-         */
-
         if (
           familyCount >= 4
         ) {
@@ -1120,45 +938,17 @@ function buildCombination(
 
 
         const odds =
-          Number(
-            candidate.odds
-          );
+          Number(candidate.odds);
 
 
-        const newTotal =
+        const total =
           state.totalOdds *
           odds;
 
 
         if (
-          !Number.isFinite(
-            newTotal
-          )
-        ) {
-          continue;
-        }
-
-
-        /*
-         * Never exceed the hard limit.
-         */
-
-        if (
-          newTotal >
-          hardUpperTarget
-        ) {
-          continue;
-        }
-
-
-        /*
-         * Don't add legs after target
-         * has already been reached.
-         */
-
-        if (
-          state.totalOdds >=
-          target
+          !Number.isFinite(total) ||
+          total > upperTarget
         ) {
           continue;
         }
@@ -1169,16 +959,13 @@ function buildCombination(
             state.usedEvents
           );
 
-        usedEvents.add(
-          key
-        );
+        usedEvents.add(key);
 
 
         const marketCounts =
           new Map(
             state.marketCounts
           );
-
 
         marketCounts.set(
           family,
@@ -1189,7 +976,7 @@ function buildCombination(
         const newState = {
 
           totalOdds:
-            newTotal,
+            total,
 
           selections: [
             ...state.selections,
@@ -1199,21 +986,25 @@ function buildCombination(
           usedEvents,
 
           marketCounts
-
         };
 
 
+        next.push(
+          newState
+        );
+
+
         /*
-         * Remember the best state found.
+         * Track the best result.
          */
 
         if (
           !bestState ||
-          stateQuality(
+          combinationQuality(
             newState,
             target
           ) <
-          stateQuality(
+          combinationQuality(
             bestState,
             target
           )
@@ -1223,132 +1014,114 @@ function buildCombination(
             newState;
         }
 
-
-        nextStates.push(
-          newState
-        );
-
       }
     }
 
 
     if (
-      !nextStates.length
+      !next.length
     ) {
       break;
     }
 
 
     /*
-     * Compress similar states.
-     *
-     * Two states with the same number
-     * of legs and almost identical odds
-     * don't both need to survive.
+     * Sort all generated states
+     * and keep only the best ones.
      */
 
-    const stateMap =
-      new Map();
+    next.sort(
+      (a, b) =>
+        combinationQuality(
+          a,
+          target
+        ) -
+        combinationQuality(
+          b,
+          target
+        )
+    );
+
+
+    /*
+     * Remove states with almost
+     * identical odds totals.
+     */
+
+    const selected = [];
+
+    const buckets =
+      new Set();
 
 
     for (
-      const state
-      of nextStates
+      const state of next
     ) {
 
       const bucket =
         Math.round(
-          state.totalOdds *
-          100
+          state.totalOdds * 100
         ) / 100;
 
 
       const signature =
-        [
-          state.selections.length,
-          bucket
-        ].join("|");
-
-
-      const existing =
-        stateMap.get(
-          signature
-        );
+        `${state.selections.length}|${bucket}`;
 
 
       if (
-        !existing ||
-        stateQuality(
-          state,
-          target
-        ) <
-        stateQuality(
-          existing,
-          target
-        )
+        buckets.has(signature)
       ) {
+        continue;
+      }
 
-        stateMap.set(
-          signature,
-          state
-        );
+
+      buckets.add(signature);
+
+      selected.push(state);
+
+
+      if (
+        selected.length >=
+        STATE_LIMIT
+      ) {
+        break;
       }
     }
 
 
-    /*
-     * Keep the best states.
-     */
-
-    beam =
-      [...stateMap.values()]
-        .sort(
-          (a, b) =>
-            stateQuality(
-              a,
-              target
-            ) -
-            stateQuality(
-              b,
-              target
-            )
-        )
-        .slice(
-          0,
-          BEAM_SIZE
-        );
+    states =
+      selected;
 
 
     /*
-     * If the target is extremely close
-     * AND the combination is reasonably
-     * strong, stop early.
+     * If we have an excellent target
+     * match with reasonable strength,
+     * stop.
      */
 
     if (
       bestState
     ) {
 
-      const targetDifference =
+      const difference =
         Math.abs(
           bestState.totalOdds -
           target
         );
 
+
       const averageStrength =
         bestState.selections.reduce(
           (sum, selection) =>
             sum +
-            scoreSelection(
-              selection
-            ),
+            scoreSelection(selection),
           0
         ) /
         bestState.selections.length;
 
 
       if (
-        targetDifference <=
+        difference <=
           target * 0.005 &&
         averageStrength >=
           70
@@ -1368,7 +1141,7 @@ function buildCombination(
 
 
   /*
-   * Final selection output.
+   * Finalize output.
    */
 
   const selections =
@@ -1380,36 +1153,29 @@ function buildCombination(
             selection
           );
 
+        const bookmakerProbability =
+          getImpliedProbability(
+            selection
+          );
+
 
         return {
 
           ...selection,
 
-          /*
-           * This is SportyBet's supplied
-           * probability where available.
-           */
-
           bookmakerProbability:
             Number(
               (
-                getImpliedProbability(
-                  selection
-                ) * 100
+                bookmakerProbability *
+                100
               ).toFixed(2)
             ),
-
-          /*
-           * Keep the original field too
-           * for compatibility.
-           */
 
           impliedProbability:
             Number(
               (
-                getImpliedProbability(
-                  selection
-                ) * 100
+                bookmakerProbability *
+                100
               ).toFixed(2)
             ),
 
@@ -1420,14 +1186,9 @@ function buildCombination(
             getRisk(
               strength
             )
-
         };
       }
     );
-
-
-  const totalOdds =
-    bestState.totalOdds;
 
 
   const averageStrength =
@@ -1452,7 +1213,7 @@ function buildCombination(
 
     totalOdds:
       Number(
-        totalOdds.toFixed(2)
+        bestState.totalOdds.toFixed(2)
       ),
 
     targetOdds:
@@ -1463,7 +1224,7 @@ function buildCombination(
     difference:
       Number(
         (
-          totalOdds -
+          bestState.totalOdds -
           target
         ).toFixed(2)
       ),
@@ -1479,7 +1240,6 @@ function buildCombination(
     lowOddsSelections,
 
     selections
-
   };
 }
 
@@ -1493,26 +1253,9 @@ function sortCandidates(
 ) {
 
   return [...candidates].sort(
-    (a, b) => {
-
-      const qualityDifference =
-        candidateQuality(b) -
-        candidateQuality(a);
-
-
-      if (
-        qualityDifference !== 0
-      ) {
-        return qualityDifference;
-      }
-
-
-      return (
-        Number(b.odds) -
-        Number(a.odds)
-      );
-
-    }
+    (a, b) =>
+      candidateQuality(b) -
+      candidateQuality(a)
   );
 }
 
@@ -1548,7 +1291,6 @@ export function runSelectionEngine(
     maxSelections:
       options.maxSelections ??
       15
-
   };
 
 
@@ -1590,6 +1332,11 @@ export function runSelectionEngine(
               selection
             );
 
+          const probability =
+            getImpliedProbability(
+              selection
+            );
+
 
           return {
 
@@ -1598,18 +1345,16 @@ export function runSelectionEngine(
             bookmakerProbability:
               Number(
                 (
-                  getImpliedProbability(
-                    selection
-                  ) * 100
+                  probability *
+                  100
                 ).toFixed(2)
               ),
 
             impliedProbability:
               Number(
                 (
-                  getImpliedProbability(
-                    selection
-                  ) * 100
+                  probability *
+                  100
                 ).toFixed(2)
               ),
 
@@ -1620,9 +1365,7 @@ export function runSelectionEngine(
               getRisk(
                 strength
               )
-
           };
-
         }
       );
 
@@ -1646,7 +1389,5 @@ export function runSelectionEngine(
     combination,
 
     topCandidates
-
   };
-
 }
