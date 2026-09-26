@@ -1497,7 +1497,12 @@ export function runSelectionEngine(
 
     candidatesAfterFiltering:
       filtered.length,
-
+    
+filteredCandidates:
+  options.includeCandidates === true
+    ? filtered
+    : undefined,
+    
     targetOdds:
       target,
 
