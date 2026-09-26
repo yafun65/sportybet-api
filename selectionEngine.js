@@ -1,3 +1,9 @@
+function normalize(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
 const ALLOWED_COMPETITIONS = [
   "Premier League",
   "La Liga",
@@ -10,18 +16,6 @@ const ALLOWED_COMPETITIONS = [
   "UEFA Nations League"
 ];
 
-
-/* =========================
-   HELPERS
-========================= */
-
-function normalize(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase();
-}
-
-
 function isAllowedCompetition(name) {
   const value = normalize(name);
 
@@ -31,130 +25,177 @@ function isAllowedCompetition(name) {
   );
 }
 
+function getEventInfo(item) {
+  const event = item?.event || {};
 
-function impliedProbability(odds) {
-  if (!odds || odds <= 1) {
+  return {
+    eventId: event.eventId || "",
+    gameId: event.gameId || "",
+    homeTeam:
+      event.homeTeamName || "",
+    awayTeam:
+      event.awayTeamName || "",
+    startTime:
+      event.startTime || 0,
+    competition:
+      event.competition || "",
+    category:
+      event.category || ""
+  };
+}
+
+function extractCandidates(items) {
+  const candidates = [];
+
+  for (const item of items) {
+    const event = getEventInfo(item);
+
+    if (
+      !event.eventId ||
+      !event.homeTeam ||
+      !event.awayTeam
+    ) {
+      continue;
+    }
+
+    if (
+      !isAllowedCompetition(
+        event.competition
+      )
+    ) {
+      continue;
+    }
+
+    const markets = Array.isArray(item.markets)
+      ? item.markets
+      : [];
+
+    for (const market of markets) {
+      const marketId =
+        String(market.marketId || "");
+
+      const marketName =
+        market.market || "";
+
+      const outcomes =
+        Array.isArray(market.outcomes)
+          ? market.outcomes
+          : [];
+
+      for (const outcome of outcomes) {
+        const odds =
+          Number(outcome.odds);
+
+        if (
+          !outcome.isActive ||
+          !Number.isFinite(odds) ||
+          odds <= 1
+        ) {
+          continue;
+        }
+
+        candidates.push({
+          eventId: event.eventId,
+          gameId: event.gameId,
+
+          match:
+            `${event.homeTeam} vs ${event.awayTeam}`,
+
+          homeTeam: event.homeTeam,
+          awayTeam: event.awayTeam,
+
+          startTime:
+            event.startTime,
+
+          competition:
+            event.competition,
+
+          category:
+            event.category,
+
+          marketId,
+          market: marketName,
+
+          specifier:
+            market.specifier || null,
+
+          outcomeId:
+            String(
+              outcome.outcomeId || ""
+            ),
+
+          pick:
+            outcome.pick || "",
+
+          odds
+        });
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function scoreSelection(selection) {
+  const odds = Number(selection.odds);
+
+  if (!Number.isFinite(odds)) {
     return 0;
   }
 
-  return 1 / odds;
-}
+  let score =
+    (1 / odds) * 100;
 
+  const market =
+    normalize(selection.market);
 
-/* =========================
-   MARKET SCORING
-========================= */
-
-function marketTypeScore(marketName) {
-  const market = normalize(marketName);
-
-  if (market.includes("double chance")) {
-    return 10;
+  if (
+    market.includes("double chance")
+  ) {
+    score += 10;
   }
 
   if (
-    market.includes("over/under") ||
-    market.includes("over under")
+    market.includes("over/under")
   ) {
-    return 8;
+    score += 8;
   }
 
   if (
     market.includes("draw no bet")
   ) {
-    return 8;
+    score += 8;
   }
 
   if (
-    market.includes("corner")
+    market.includes("gg/ng")
   ) {
-    return 7;
-  }
-
-  if (
-    market.includes("gg/ng") ||
-    market.includes("both teams")
-  ) {
-    return 6;
+    score += 6;
   }
 
   if (
     market.includes("asian handicap")
   ) {
-    return 5;
+    score += 5;
   }
 
   if (
-    market.includes("2up")
+    market.includes("1x2 - 2up")
   ) {
-    return 5;
+    score += 5;
   }
-
-  if (
-    market.includes("handicap")
-  ) {
-    return 4;
-  }
-
-  if (
-    market.includes("1x2")
-  ) {
-    return 3;
-  }
-
-  return 0;
-}
-
-
-function complexityPenalty(marketName) {
-  const market = normalize(marketName);
 
   if (
     market.includes("correct score")
   ) {
-    return 35;
+    score -= 35;
   }
 
   if (
-    market.includes("half time/full time") ||
-    market.includes("half time / full time")
+    market.includes("half time/full time")
   ) {
-    return 20;
+    score -= 20;
   }
-
-  if (
-    market.includes("correct")
-  ) {
-    return 30;
-  }
-
-  return 0;
-}
-
-
-/* =========================
-   CONFIDENCE SCORE
-========================= */
-
-function scoreSelection({
-  odds,
-  market
-}) {
-
-  const probability =
-    impliedProbability(odds);
-
-  let score =
-    probability * 100;
-
-
-  score +=
-    marketTypeScore(market);
-
-
-  score -=
-    complexityPenalty(market);
-
 
   if (odds >= 5) {
     score -= 20;
@@ -162,630 +203,198 @@ function scoreSelection({
     score -= 10;
   }
 
-
-  if (odds <= 1.15) {
-    score -= 3;
-  }
-
-
-  score =
-    Math.max(
-      1,
-      Math.min(95, score)
-    );
-
-
-  let risk = "High";
-
-  if (score >= 75) {
-    risk = "Lower";
-  } else if (score >= 60) {
-    risk = "Moderate";
-  }
-
-
-  return {
-    confidence:
-      Number(score.toFixed(2)),
-
-    risk
-  };
-}
-
-
-/* =========================
-   EVENT KEY
-========================= */
-
-function eventKey(item) {
-
-  const event =
-    item.event || item;
-
-  return String(
-    event.eventId ||
-    event.id ||
-    event.gameId ||
-    `${event.homeTeamName || event.homeTeam || ""}-${event.awayTeamName || event.awayTeam || ""}`
+  return Math.max(
+    1,
+    Math.min(95, score)
   );
 }
 
-
-/* =========================
-   GET EVENT INFORMATION
-========================= */
-
-function getEventInfo(item) {
-
-  const event =
-    item.event || item;
-
-
-  const homeTeam =
-    event.homeTeamName ||
-    event.homeTeam ||
-    event.homeTeam?.name ||
-    event.home?.name ||
-    "";
-
-
-  const awayTeam =
-    event.awayTeamName ||
-    event.awayTeam ||
-    event.awayTeam?.name ||
-    event.away?.name ||
-    "";
-
-
-  const competition =
-    event.competition ||
-    event.tournamentName ||
-    event.tournament?.name ||
-    event.tournament?.tournamentName ||
-    "";
-
-
-  return {
-    event,
-    homeTeam,
-    awayTeam,
-    competition
-  };
-}
-
-
-/* =========================
-   EXTRACT CANDIDATES
-========================= */
-
-function extractCandidates(events) {
-
-  const candidates = [];
-
-
-  if (!Array.isArray(events)) {
-    return candidates;
+function getRisk(score) {
+  if (score >= 75) {
+    return "Lower";
   }
 
-
-  for (const item of events) {
-
-    const {
-      event,
-      homeTeam,
-      awayTeam,
-      competition
-    } = getEventInfo(item);
-
-
-    /*
-      Some SportyBet responses store the
-      tournament object inside event.
-    */
-
-    const actualCompetition =
-      competition ||
-      item?.tournament?.name ||
-      item?.tournament?.tournamentName ||
-      "";
-
-
-    /*
-      If competition is available, respect
-      the allowed competition list.
-    */
-
-    if (
-      actualCompetition &&
-      !isAllowedCompetition(
-        actualCompetition
-      )
-    ) {
-      continue;
-    }
-
-
-    const markets =
-      Array.isArray(item.markets)
-        ? item.markets
-        : Array.isArray(event.markets)
-          ? event.markets
-          : [];
-
-
-    for (const market of markets) {
-
-      const marketName =
-        market.market ||
-        market.name ||
-        "";
-
-
-      const marketId =
-        String(
-          market.marketId ||
-          market.id ||
-          ""
-        );
-
-
-      /*
-        Ignore markets that are not useful
-        for the initial engine.
-      */
-
-      if (
-        normalize(marketName)
-          .includes("correct score") ||
-        normalize(marketName)
-          .includes("half time/full time")
-      ) {
-        continue;
-      }
-
-
-      const outcomes =
-        Array.isArray(
-          market.outcomes
-        )
-          ? market.outcomes
-          : [];
-
-
-      for (
-        const outcome
-        of outcomes
-      ) {
-
-        const odds =
-          Number(
-            outcome.odds ||
-            outcome.price ||
-            0
-          );
-
-
-        if (
-          !Number.isFinite(odds) ||
-          odds <= 1
-        ) {
-          continue;
-        }
-
-
-        const pick =
-          outcome.pick ||
-          outcome.name ||
-          "";
-
-
-        if (!pick) {
-          continue;
-        }
-
-
-        const {
-          confidence,
-          risk
-        } =
-          scoreSelection({
-            odds,
-            market:
-              marketName
-          });
-
-
-        candidates.push({
-
-          eventId:
-            event.eventId ||
-            event.id ||
-            "",
-
-          gameId:
-            event.gameId ||
-            "",
-
-          match:
-            homeTeam && awayTeam
-              ? `${homeTeam} vs ${awayTeam}`
-              : "Unknown Match",
-
-          homeTeam,
-
-          awayTeam,
-
-          competition:
-            actualCompetition,
-
-          startTime:
-            event.startTime ||
-            event.start_time ||
-            null,
-
-          marketId,
-
-          market:
-            marketName,
-
-          specifier:
-            market.specifier ||
-            null,
-
-          outcomeId:
-            String(
-              outcome.outcomeId ||
-              outcome.id ||
-              ""
-            ),
-
-          pick,
-
-          odds,
-
-          confidence,
-
-          risk
-
-        });
-
-      }
-
-    }
-
+  if (score >= 60) {
+    return "Moderate";
   }
 
-
-  return candidates;
+  return "High";
 }
-
-
-/* =========================
-   FILTER
-========================= */
 
 function filterCandidates(
   candidates,
   options
 ) {
-
-  const {
-    minOdds = 1.15,
-    maxOdds = 3.5,
-    minConfidence = 55
-  } = options;
-
-
   return candidates.filter(
-    candidate => {
+    selection => {
+      const odds =
+        Number(selection.odds);
+
+      const score =
+        scoreSelection(selection);
+
+      const market =
+        normalize(selection.market);
 
       if (
-        candidate.odds <
-        minOdds
+        odds < options.minOdds ||
+        odds > options.maxOdds
       ) {
         return false;
       }
 
-
       if (
-        candidate.odds >
-        maxOdds
+        score < options.minConfidence
       ) {
         return false;
       }
 
-
       if (
-        candidate.confidence <
-        minConfidence
+        market.includes("correct score") ||
+        market.includes(
+          "half time/full time"
+        )
       ) {
         return false;
       }
-
 
       return true;
-
     }
   );
 }
 
-
-/* =========================
-   SORT
-========================= */
-
-function sortCandidates(
-  candidates
-) {
-
-  return [
-    ...candidates
-  ].sort(
+function sortCandidates(candidates) {
+  return [...candidates].sort(
     (a, b) =>
-      b.confidence -
-      a.confidence
+      scoreSelection(b) -
+      scoreSelection(a)
   );
 }
 
-
-/* =========================
-   BUILD COMBINATION
-========================= */
+function eventKey(selection) {
+  return (
+    selection.eventId ||
+    selection.gameId ||
+    selection.match
+  );
+}
 
 function buildCombination(
   candidates,
   target,
-  options
+  maxSelections = 15
 ) {
-
-  const {
-    tolerance = 0.20,
-    maxSelections = 15
-  } = options;
-
-
   if (!candidates.length) {
     return null;
   }
 
+  const sorted =
+    sortCandidates(candidates);
 
-  /*
-    Keep only the strongest candidate
-    from each match.
-  */
+  const usedEvents =
+    new Set();
 
-  const bestByEvent =
-    new Map();
+  const selections = [];
 
+  let totalOdds = 1;
 
-  for (
-    const candidate
-    of candidates
-  ) {
+  for (const candidate of sorted) {
+    if (
+      selections.length >=
+      maxSelections
+    ) {
+      break;
+    }
 
     const key =
       eventKey(candidate);
 
-
-    const existing =
-      bestByEvent.get(key);
-
-
-    if (
-      !existing ||
-      candidate.confidence >
-        existing.confidence
-    ) {
-
-      bestByEvent.set(
-        key,
-        candidate
-      );
-
+    if (usedEvents.has(key)) {
+      continue;
     }
 
-  }
+    const newTotal =
+      totalOdds *
+      Number(candidate.odds);
 
+    if (
+      newTotal >
+      target * 1.2
+    ) {
+      continue;
+    }
 
-  const pool =
-    sortCandidates(
-      Array.from(
-        bestByEvent.values()
-      )
-    );
+    usedEvents.add(key);
 
-
-  let bestCombination = null;
-
-  let bestDifference =
-    Infinity;
-
-
-  /*
-    Greedy search.
-
-    We add strong selections while
-    moving toward the requested target.
-  */
-
-  for (
-    const startCandidate
-    of pool
-  ) {
-
-    const combination = [
-      startCandidate
-    ];
-
-
-    let totalOdds =
-      startCandidate.odds;
-
-
-    const usedEvents =
-      new Set([
-        eventKey(
-          startCandidate
+    selections.push({
+      ...candidate,
+      confidence:
+        Math.round(
+          scoreSelection(candidate)
+        ),
+      risk:
+        getRisk(
+          scoreSelection(candidate)
         )
-      ]);
+    });
 
-
-    for (
-      const candidate
-      of pool
-    ) {
-
-      if (
-        combination.length >=
-        maxSelections
-      ) {
-        break;
-      }
-
-
-      const key =
-        eventKey(candidate);
-
-
-      if (
-        usedEvents.has(key)
-      ) {
-        continue;
-      }
-
-
-      const newTotal =
-        totalOdds *
-        candidate.odds;
-
-
-      /*
-        Do not allow the combination
-        to overshoot excessively.
-      */
-
-      if (
-        newTotal >
-        target * (1 + tolerance)
-      ) {
-        continue;
-      }
-
-
-      combination.push(
-        candidate
-      );
-
-
-      usedEvents.add(key);
-
-      totalOdds =
-        newTotal;
-
-
-      if (
-        totalOdds >=
-        target
-      ) {
-        break;
-      }
-
-    }
-
-
-    const difference =
-      Math.abs(
-        totalOdds - target
-      );
-
+    totalOdds = newTotal;
 
     if (
-      difference <
-      bestDifference
+      totalOdds >= target * 0.8
     ) {
-
-      bestDifference =
-        difference;
-
-
-      bestCombination = {
-
-        selections:
-          combination,
-
-        totalOdds:
-          Number(
-            totalOdds.toFixed(2)
-          ),
-
-        difference:
-          Number(
-            difference.toFixed(2)
-          ),
-
-        averageConfidence:
-          Number(
-            (
-              combination.reduce(
-                (sum, item) =>
-                  sum +
-                  item.confidence,
-                0
-              ) /
-              combination.length
-            ).toFixed(2)
-          )
-
-      };
-
+      break;
     }
-
   }
 
+  if (!selections.length) {
+    return null;
+  }
 
-  return bestCombination;
+  return {
+    totalOdds:
+      Number(totalOdds.toFixed(2)),
+
+    selections
+  };
 }
 
-
-/* =========================
-   MAIN ENGINE
-========================= */
-
-function runSelectionEngine(
-  events,
+export function runSelectionEngine(
+  items,
   target,
   options = {}
 ) {
+  const settings = {
+    minOdds:
+      options.minOdds ?? 1.15,
+
+    maxOdds:
+      options.maxOdds ?? 3.5,
+
+    minConfidence:
+      options.minConfidence ?? 55,
+
+    maxSelections:
+      options.maxSelections ?? 15
+  };
 
   const candidates =
-    extractCandidates(
-      events
-    );
-
+    extractCandidates(items);
 
   const filtered =
     filterCandidates(
       candidates,
-      options
+      settings
     );
-
-
-  const sorted =
-    sortCandidates(
-      filtered
-    );
-
 
   const combination =
     buildCombination(
-      sorted,
+      filtered,
       target,
-      options
+      settings.maxSelections
     );
 
-
   return {
-
     success:
       Boolean(combination),
 
@@ -798,17 +407,18 @@ function runSelectionEngine(
     combination,
 
     topCandidates:
-      sorted.slice(0, 20)
-
+      sortCandidates(filtered)
+        .slice(0, 20)
+        .map(selection => ({
+          ...selection,
+          confidence:
+            Math.round(
+              scoreSelection(selection)
+            ),
+          risk:
+            getRisk(
+              scoreSelection(selection)
+            )
+        }))
   };
-
 }
-
-
-/* =========================
-   EXPORT
-========================= */
-
-export {
-  runSelectionEngine
-};
