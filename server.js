@@ -1,39 +1,4 @@
-app.get("/football-events", async (req, res) => {
-  try {
-    const page =
-      Math.max(
-        1,
-        Number(req.query.page || 1)
-      );
 
-    const data =
-      await fetchUpcomingEventsPage(
-        page,
-        false
-      );
-
-    res.json({
-      success: true,
-      page,
-      data
-    });
-
-  } catch (error) {
-
-    console.error(
-      "Football events error:",
-      error
-    );
-
-    res.status(500).json({
-      success: false,
-      error:
-        error.message ||
-        "Failed to fetch football events."
-    });
-
-  }
-});
 app.get("/selection-engine", async (req, res) => {
 
   try {
