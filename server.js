@@ -1160,6 +1160,24 @@ app.get("/debug-sportybet", async (req, res) => {
     });
   }
 });
+app.get("/debug-sportybet", async (req, res) => {
+  try {
+    const data = await fetchUpcomingEventsPage(1, false);
+
+    return res.json({
+      success: true,
+      data
+    });
+
+  } catch (error) {
+    console.error("Debug SportyBet error:", error);
+
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
 /*
  * =========================================================
  * SELECTION ENGINE
