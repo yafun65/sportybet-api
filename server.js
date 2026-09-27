@@ -314,39 +314,27 @@ function cleanEventMarkets(event) {
   }
 
   return {
-    eventId:
-      String(
-        event.eventId || ""
-      ),
+  event: {
+    eventId: String(event.eventId || ""),
 
-    gameId:
-      String(
-        event.gameId || ""
-      ),
+    gameId: String(event.gameId || ""),
 
-    homeTeamName:
-      event.homeTeamName || "",
+    homeTeamName: event.homeTeamName || "",
 
-    awayTeamName:
-      event.awayTeamName || "",
+    awayTeamName: event.awayTeamName || "",
 
-    startTime:
-      event.estimateStartTime ??
-      null,
+    startTime: event.estimateStartTime ?? null,
 
     competition:
-      event.sport?.category?.tournament?.name ||
-      "",
+      event.sport?.category?.tournament?.name || "",
 
     category:
-      event.sport?.category?.name ||
-      "",
+      event.sport?.category?.name || ""
+  },
 
-    markets:
-      cleanedMarkets
-  };
+  markets: cleanedMarkets
+};
 }
-
 /*
  * =========================================================
  * ROOT
