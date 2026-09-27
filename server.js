@@ -799,7 +799,77 @@ app.get(
     }
   }
 );
+app.get("/debug-parser", async (req, res) => {
+  try {
+    const data =
+      await fetchUpcomingEventsPage(1, false);
 
+    const tournaments =
+      getTournaments(data);
+
+    let totalEvents = 0;
+    let allowedTournaments = 0;
+    let cleanedEvents = 0;
+
+    const samples = [];
+
+    for (const tournament of tournaments) {
+      const competition =
+        text(tournament?.name || "");
+
+      const allowed =
+        isAllowedCompetition(competition);
+
+      if (allowed) {
+        allowedTournaments++;
+      }
+
+      const events =
+        Array.isArray(tournament?.events)
+          ? tournament.events
+          : [];
+
+      totalEvents += events.length;
+
+      if (!allowed) {
+        continue;
+      }
+
+      for (const event of events) {
+        const cleaned =
+          cleanEventMarkets(event);
+
+        if (cleaned) {
+          cleanedEvents++;
+
+          if (samples.length < 5) {
+            samples.push(cleaned);
+          }
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      tournaments: tournaments.length,
+      allowedTournaments,
+      totalEvents,
+      cleanedEvents,
+      samples
+    });
+
+  } catch (error) {
+    console.error(
+      "Parser debug error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
 /*
  * =========================================================
  * SELECTION ENGINE
