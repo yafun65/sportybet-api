@@ -365,285 +365,82 @@ function extractOutcomes(market) {
  * CLEAN EVENT MARKETS
  * =========================================================
  */
+function cleanEventMarkets(event) {
+  if (!event) return null;
 
-function cleanEventMarkets({
-  event,
-  tournament
-}) {
-
-  if (!event) {
-    return null;
-  }
-
-  const eventId =
-    getEventId(event);
-
-  if (!eventId) {
-    return null;
-  }
-
-  const homeTeam =
-    getHomeTeam(event);
-
-  const awayTeam =
-    getAwayTeam(event);
-
-  const competition =
-    text(
-      tournament?.name ||
-      tournament?.tournamentName ||
-      event?.competition ||
-      event?.tournamentName
-    );
-
-  const markets =
-    extractMarkets(event);
+  const markets = Array.isArray(event.markets)
+    ? event.markets
+    : [];
 
   const cleanedMarkets = [];
 
-  for (
-    const market of markets
-  ) {
+  for (const market of markets) {
+    if (!market) continue;
 
-    if (!market) {
-      continue;
-    }
-
-    const marketName =
-      text(
-        market.market ||
-        market.name ||
-        market.desc ||
-        market.marketName ||
-        market.marketDesc
-      );
-
-    if (!marketName) {
-      continue;
-    }
-
-    const lower =
-      marketName.toLowerCase();
-
-    /*
-     * Remove markets that are
-     * generally unsuitable.
-     */
-
-    if (
-      lower.includes(
-        "correct score"
-      ) ||
-      lower.includes(
-        "half time/full time"
-      )
-    ) {
-      continue;
-    }
-
-    const outcomes =
-      extractOutcomes(
-        market
-      );
+    const outcomes = Array.isArray(market.outcomes)
+      ? market.outcomes
+      : [];
 
     const cleanedOutcomes = [];
 
-    for (
-      const outcome of outcomes
-    ) {
+    for (const outcome of outcomes) {
+      if (!outcome) continue;
 
-      if (!outcome) {
+      if (Number(outcome.isActive) === 0) {
         continue;
       }
 
-      /*
-       * Active status
-       */
+      const odds = Number(outcome.odds);
+      const probability = Number(outcome.probability);
 
-      if (
-        outcome.isActive === false ||
-        outcome.active === false
-      ) {
+      if (!Number.isFinite(odds) || odds < 1.01) {
         continue;
       }
 
-      const odds =
-        toNumber(
-          outcome.odds ||
-          outcome.odd ||
-          outcome.price
-        );
-
-      if (
-        odds < 1.01
-      ) {
+      if (!Number.isFinite(probability) || probability <= 0) {
         continue;
       }
-
-      /*
-       * Selection name
-       */
-
-      const pick =
-        text(
-          outcome.pick ||
-          outcome.desc ||
-          outcome.name ||
-          outcome.outcomeName ||
-          outcome.label ||
-          outcome.selectedOutcome
-        );
-
-      if (!pick) {
-        continue;
-      }
-
-      /*
-       * Probability.
-       *
-       * If SportyBet provides one,
-       * use it.
-       *
-       * Otherwise derive the
-       * market-implied probability.
-       */
-
-      let probability =
-        toNumber(
-          outcome.probability
-        );
-
-      if (
-        probability <= 0
-      ) {
-
-        probability =
-          1 / odds;
-
-      }
-
-      /*
-       * Keep probability between
-       * 0 and 1.
-       */
-
-      probability =
-        Math.max(
-          0,
-          Math.min(
-            1,
-            probability
-          )
-        );
 
       cleanedOutcomes.push({
-
-        outcomeId:
-          text(
-            outcome.outcomeId ||
-            outcome.id ||
-            outcome.outcomeID
-          ),
-
-        pick,
-
+        outcomeId: String(outcome.id || ""),
+        pick: outcome.desc || "",
         odds,
-
         probability,
-
         isActive: true
-
       });
-
     }
 
-    if (
-      cleanedOutcomes.length
-    ) {
-
-      cleanedMarkets.push({
-
-        marketId:
-          text(
-            market.marketId ||
-            market.id ||
-            market.marketID
-          ),
-
-        market:
-          marketName,
-
-        name:
-          marketName,
-
-        specifier:
-          market.specifier ??
-          market.params ??
-          null,
-
-        outcomes:
-          cleanedOutcomes
-
-      });
-
+    if (!cleanedOutcomes.length) {
+      continue;
     }
 
+    cleanedMarkets.push({
+      marketId: String(market.id || ""),
+      market: market.desc || market.name || "",
+      name: market.name || market.desc || "",
+      specifier: market.specifier ?? null,
+      outcomes: cleanedOutcomes
+    });
   }
 
-  /*
-   * If no markets were found,
-   * don't send the event to the
-   * selection engine.
-   */
-
-  if (
-    !cleanedMarkets.length
-  ) {
+  if (!cleanedMarkets.length) {
     return null;
   }
 
   return {
-
-    event: {
-
-      eventId,
-
-      gameId:
-        text(
-          event.gameId ||
-          event.matchId ||
-          eventId
-        ),
-
-      homeTeamName:
-        homeTeam,
-
-      awayTeamName:
-        awayTeam,
-
-      startTime:
-        event.startTime ??
-        event.startTimestamp ??
-        event.beginTime ??
-        null,
-
-      competition,
-
-      category:
-        text(
-          event.category ||
-          tournament?.category ||
-          "Soccer"
-        )
-
-    },
-
-    markets:
-      cleanedMarkets
-
+    eventId: String(event.eventId || ""),
+    gameId: String(event.gameId || ""),
+    homeTeamName: event.homeTeamName || "",
+    awayTeamName: event.awayTeamName || "",
+    startTime: event.estimateStartTime ?? null,
+    competition:
+      event.sport?.category?.tournament?.name || "",
+    category:
+      event.sport?.category?.name || "",
+    markets: cleanedMarkets
   };
 }
-
+    
 /*
  * =========================================================
  * ROOT
