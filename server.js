@@ -210,10 +210,10 @@ async function fetchUpcomingEventsPage(
  */
 
 function getTournaments(data) {
-
-  if (!data) {
-    return [];
-  }
+  return Array.isArray(data?.data?.tournaments)
+    ? data.data.tournaments
+    : [];
+}
 
   const root =
     data.data || data;
@@ -859,30 +859,21 @@ app.get(
       const markets = [];
 
       for (
-        const tournament
-        of tournaments
-      ) {
+const tournaments = getTournaments(data);
 
-        const events =
-          Array.isArray(
-            tournament?.events
-          )
-            ? tournament.events
-            : [];
+for (const tournament of tournaments) {
+  const events = Array.isArray(tournament.events)
+    ? tournament.events
+    : [];
 
-        for (
-          const event of events
-        ) {
+  for (const event of events) {
+    const cleaned = cleanEventMarkets(event);
 
-          const cleaned =
-            cleanEventMarkets({
-              event,
-              tournament
-            });
+    if (!cleaned) continue;
 
-          if (!cleaned) {
-            continue;
-          }
+    // your existing processing here
+  }
+}
 
           for (
             const market
