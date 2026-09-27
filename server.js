@@ -140,38 +140,45 @@ async function fetchUpcomingEventsPage(
   page = 1,
   corners = false
 ) {
-
   const url =
     `${SPORTYBET_BASE}` +
     `/api/ng/factsCenter/pcUpcomingEvents` +
-    `?marketId=${MARKET_IDS}` +
-    `&timeline=720`;
+    `?sportId=sr:sport:1` +
+    `&marketId=${MARKET_IDS}` +
+    `&pageSize=100` +
+    `&pageNum=${page}` +
+    `&todayGames=false` +
+    `&timeline=720` +
+    `&_t=${Date.now()}`;
 
-  const response =
-    await fetch(
-      url,
-      {
-        method: "GET",
-        headers: SPORTYBET_HEADERS
-      }
-    );
+  console.log("SportyBet URL:", url);
 
-  const raw =
-    await response.text();
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      ...SPORTYBET_HEADERS,
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "Current-Country": "NG",
+      "Referer": "https://www.sportybet.com/ng/",
+      "User-Agent":
+        "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36"
+    }
+  });
+
+  const raw = await response.text();
 
   console.log(
-    "SportyBet upcoming status:",
+    "SportyBet status:",
     response.status,
-    "page:",
-    page,
-    "length:",
+    "response length:",
     raw.length
   );
 
   if (!response.ok) {
     console.log(
-      "SportyBet error response:",
-      raw.slice(0, 1000)
+      "SportyBet error body:",
+      raw.slice(0, 2000)
     );
 
     throw new Error(
