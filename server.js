@@ -145,8 +145,7 @@ async function fetchUpcomingEventsPage(
     `${SPORTYBET_BASE}` +
     `/api/ng/factsCenter/pcUpcomingEvents` +
     `?marketId=${MARKET_IDS}` +
-    `&timeline=720` +
-    `&page=${page}`;
+    `&timeline=720`;
 
   const response =
     await fetch(
@@ -160,7 +159,21 @@ async function fetchUpcomingEventsPage(
   const raw =
     await response.text();
 
+  console.log(
+    "SportyBet upcoming status:",
+    response.status,
+    "page:",
+    page,
+    "length:",
+    raw.length
+  );
+
   if (!response.ok) {
+    console.log(
+      "SportyBet error response:",
+      raw.slice(0, 1000)
+    );
+
     throw new Error(
       `SportyBet HTTP ${response.status}`
     );
