@@ -1,4 +1,5 @@
 import express from "express";
+import { runSelectionEngine } from "./selectionEngine.js";
 
 const app = express();
 
@@ -6,127 +7,1665 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 
-const SPORTYBET_BASE =
-  "https://www.sportybet.com";
+const SPORTYBET_BASE = "https://www.sportybet.com";
 
-app.get("/", (req, res) => {
-  res.json({
-    status: "online",
-    service: "SportyBet Slip Optimizer API"
-  });
+/*
+ * =========================================================
+ * CONFIG
+ * =========================================================
+ */
+
+const SPORTYBET_HEADERS = {
+  Accept: "application/json",
+  "Content-Type": "application/json",
+  "Current-Country": "NG",
+  "Current-Language": "en",
+  Origin: "https://www.sportybet.com",
+  Referer: "https://www.sportybet.com/ng/",
+  "User-Agent":
+    "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+};
+
+const MAX_EVENT_SEARCH_PAGES = 10;
+
+const SELECTION_CACHE_TTL_MS = 30 * 1000;
+
+const selectionCache = new Map();
+
+/*
+ * =========================================================
+ * SPORTYBET MARKET IDS
+ * =========================================================
+ */
+
+const MARKET_IDS =
+  "1,18,10,29,11,26,36,14,16,45,47,60,60100";
+
+/*
+ * =========================================================
+ * ALLOWED COMPETITIONS
+ * =========================================================
+ */
+
+const ALLOWED_COMPETITIONS = [
+  "Premier League",
+  "La Liga",
+  "Serie A",
+  "Bundesliga",
+  "Ligue 1",
+  "UEFA Champions League",
+  "UEFA Europa League",
+  "UEFA Europa Conference League",
+  "Champions League",
+  "Europa League",
+  "Europa Conference League",
+  "Nations League"
+];
+
+/*
+ * =========================================================
+ * CORS
+ * =========================================================
+ */
+
+app.use((req, res, next) => {
+  res.header(
+    "Access-Control-Allow-Origin",
+    "*"
+  );
+
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept"
+  );
+
+  next();
 });
 
-app.get("/booking/:code", async (req, res) => {
-  const code = String(req.params.code || "")
-    .trim()
-    .toUpperCase();
+/*
+ * =========================================================
+ * HELPERS
+ * =========================================================
+ */
 
-  if (!/^[A-Z0-9]{4,20}$/.test(code)) {
-    return res.status(400).json({
-      error: "Invalid SportyBet booking code."
-    });
+function toNumber(value, fallback = 0) {
+  const n = Number(value);
+
+  return Number.isFinite(n)
+    ? n
+    : fallback;
+}
+
+function text(value) {
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return "";
   }
+
+  return String(value);
+}
+
+function isAllowedCompetition(name) {
+  const value = text(name)
+    .trim()
+    .toLowerCase();
+
+  if (!value) {
+    return false;
+  }
+
+  return ALLOWED_COMPETITIONS.some(
+    allowed => {
+      const a = allowed
+        .toLowerCase();
+
+      return (
+        value === a ||
+        value.includes(a) ||
+        a.includes(value)
+      );
+    }
+  );
+}
+
+/*
+ * =========================================================
+ * SPORTYBET UPCOMING EVENTS
+ * =========================================================
+ */
+
+async function fetchUpcomingEventsPage(
+  page = 1,
+  corners = false
+) {
 
   const url =
-    `${SPORTYBET_BASE}/api/ng/orders/share/${encodeURIComponent(code)}`;
+    `${SPORTYBET_BASE}` +
+    `/api/ng/factsCenter/pcUpcomingEvents` +
+    `?marketId=${MARKET_IDS}` +
+    `&timeline=720` +
+    `&page=${page}`;
+
+  const response =
+    await fetch(
+      url,
+      {
+        method: "GET",
+        headers: SPORTYBET_HEADERS
+      }
+    );
+
+  const raw =
+    await response.text();
+
+  if (!response.ok) {
+    throw new Error(
+      `SportyBet HTTP ${response.status}`
+    );
+  }
+
+  let data;
 
   try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        "Accept": "application/json",
-        "Current-Country": "NG"
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      "SportyBet returned invalid JSON."
+    );
+  }
+
+  return data;
+}
+
+/*
+ * =========================================================
+ * EXTRACT TOURNAMENTS
+ * =========================================================
+ *
+ * SportyBet has changed response structures over time.
+ * This function handles the common structures.
+ * =========================================================
+ */
+
+function getTournaments(data) {
+
+  if (!data) {
+    return [];
+  }
+
+  const root =
+    data.data || data;
+
+  if (
+    Array.isArray(root)
+  ) {
+    return root;
+  }
+
+  if (
+    Array.isArray(root.tournaments)
+  ) {
+    return root.tournaments;
+  }
+
+  if (
+    Array.isArray(root.tournamentList)
+  ) {
+    return root.tournamentList;
+  }
+
+  if (
+    Array.isArray(root.records)
+  ) {
+    return root.records;
+  }
+
+  if (
+    Array.isArray(root.events)
+  ) {
+    return [
+      {
+        name: "",
+        events: root.events
       }
-    });
+    ];
+  }
 
-    const raw = await response.text();
+  return [];
+}
 
-    console.log(
-      "SportyBet status:",
-      response.status
+/*
+ * =========================================================
+ * EVENT ID
+ * =========================================================
+ */
+
+function getEventId(event) {
+
+  return text(
+    event?.eventId ||
+    event?.id ||
+    event?.matchId ||
+    event?.gameId
+  );
+}
+
+/*
+ * =========================================================
+ * TEAM NAMES
+ * =========================================================
+ */
+
+function getHomeTeam(event) {
+
+  return text(
+    event?.homeTeamName ||
+    event?.homeTeam ||
+    event?.home?.name ||
+    event?.home?.teamName
+  );
+}
+
+function getAwayTeam(event) {
+
+  return text(
+    event?.awayTeamName ||
+    event?.awayTeam ||
+    event?.away?.name ||
+    event?.away?.teamName
+  );
+}
+
+/*
+ * =========================================================
+ * MARKET EXTRACTION
+ * =========================================================
+ */
+
+function extractMarkets(event) {
+
+  const possible =
+    event?.markets ||
+    event?.marketList ||
+    event?.marketGroups ||
+    event?.marketsList ||
+    [];
+
+  if (
+    Array.isArray(possible)
+  ) {
+    return possible;
+  }
+
+  return [];
+}
+
+/*
+ * =========================================================
+ * OUTCOME EXTRACTION
+ * =========================================================
+ */
+
+function extractOutcomes(market) {
+
+  const outcomes =
+    market?.outcomes ||
+    market?.selections ||
+    market?.options ||
+    market?.outcomeList ||
+    [];
+
+  if (
+    Array.isArray(outcomes)
+  ) {
+    return outcomes;
+  }
+
+  /*
+   * Some SportyBet structures
+   * store outcomes as an object.
+   */
+
+  if (
+    outcomes &&
+    typeof outcomes === "object"
+  ) {
+    return Object.values(
+      outcomes
+    );
+  }
+
+  return [];
+}
+
+/*
+ * =========================================================
+ * CLEAN EVENT MARKETS
+ * =========================================================
+ */
+
+function cleanEventMarkets({
+  event,
+  tournament
+}) {
+
+  if (!event) {
+    return null;
+  }
+
+  const eventId =
+    getEventId(event);
+
+  if (!eventId) {
+    return null;
+  }
+
+  const homeTeam =
+    getHomeTeam(event);
+
+  const awayTeam =
+    getAwayTeam(event);
+
+  const competition =
+    text(
+      tournament?.name ||
+      tournament?.tournamentName ||
+      event?.competition ||
+      event?.tournamentName
     );
 
-    console.log(
-      "Response length:",
-      raw.length
-    );
+  const markets =
+    extractMarkets(event);
 
-    if (!response.ok) {
-      return res.status(502).json({
-        error: `SportyBet returned HTTP ${response.status}.`
-      });
+  const cleanedMarkets = [];
+
+  for (
+    const market of markets
+  ) {
+
+    if (!market) {
+      continue;
     }
 
-    let data;
+    const marketName =
+      text(
+        market.market ||
+        market.name ||
+        market.desc ||
+        market.marketName ||
+        market.marketDesc
+      );
+
+    if (!marketName) {
+      continue;
+    }
+
+    const lower =
+      marketName.toLowerCase();
+
+    /*
+     * Remove markets that are
+     * generally unsuitable.
+     */
+
+    if (
+      lower.includes(
+        "correct score"
+      ) ||
+      lower.includes(
+        "half time/full time"
+      )
+    ) {
+      continue;
+    }
+
+    const outcomes =
+      extractOutcomes(
+        market
+      );
+
+    const cleanedOutcomes = [];
+
+    for (
+      const outcome of outcomes
+    ) {
+
+      if (!outcome) {
+        continue;
+      }
+
+      /*
+       * Active status
+       */
+
+      if (
+        outcome.isActive === false ||
+        outcome.active === false
+      ) {
+        continue;
+      }
+
+      const odds =
+        toNumber(
+          outcome.odds ||
+          outcome.odd ||
+          outcome.price
+        );
+
+      if (
+        odds < 1.01
+      ) {
+        continue;
+      }
+
+      /*
+       * Selection name
+       */
+
+      const pick =
+        text(
+          outcome.pick ||
+          outcome.desc ||
+          outcome.name ||
+          outcome.outcomeName ||
+          outcome.label ||
+          outcome.selectedOutcome
+        );
+
+      if (!pick) {
+        continue;
+      }
+
+      /*
+       * Probability.
+       *
+       * If SportyBet provides one,
+       * use it.
+       *
+       * Otherwise derive the
+       * market-implied probability.
+       */
+
+      let probability =
+        toNumber(
+          outcome.probability
+        );
+
+      if (
+        probability <= 0
+      ) {
+
+        probability =
+          1 / odds;
+
+      }
+
+      /*
+       * Keep probability between
+       * 0 and 1.
+       */
+
+      probability =
+        Math.max(
+          0,
+          Math.min(
+            1,
+            probability
+          )
+        );
+
+      cleanedOutcomes.push({
+
+        outcomeId:
+          text(
+            outcome.outcomeId ||
+            outcome.id ||
+            outcome.outcomeID
+          ),
+
+        pick,
+
+        odds,
+
+        probability,
+
+        isActive: true
+
+      });
+
+    }
+
+    if (
+      cleanedOutcomes.length
+    ) {
+
+      cleanedMarkets.push({
+
+        marketId:
+          text(
+            market.marketId ||
+            market.id ||
+            market.marketID
+          ),
+
+        market:
+          marketName,
+
+        name:
+          marketName,
+
+        specifier:
+          market.specifier ??
+          market.params ??
+          null,
+
+        outcomes:
+          cleanedOutcomes
+
+      });
+
+    }
+
+  }
+
+  /*
+   * If no markets were found,
+   * don't send the event to the
+   * selection engine.
+   */
+
+  if (
+    !cleanedMarkets.length
+  ) {
+    return null;
+  }
+
+  return {
+
+    event: {
+
+      eventId,
+
+      gameId:
+        text(
+          event.gameId ||
+          event.matchId ||
+          eventId
+        ),
+
+      homeTeamName:
+        homeTeam,
+
+      awayTeamName:
+        awayTeam,
+
+      startTime:
+        event.startTime ??
+        event.startTimestamp ??
+        event.beginTime ??
+        null,
+
+      competition,
+
+      category:
+        text(
+          event.category ||
+          tournament?.category ||
+          "Soccer"
+        )
+
+    },
+
+    markets:
+      cleanedMarkets
+
+  };
+}
+
+/*
+ * =========================================================
+ * ROOT
+ * =========================================================
+ */
+
+app.get(
+  "/",
+  (req, res) => {
+
+    res.json({
+
+      status: "online",
+
+      service:
+        "SportyBet Slip Optimizer API",
+
+      features: [
+        "booking-loader",
+        "event-markets",
+        "multi-page-event-search",
+        "selection-engine"
+      ]
+
+    });
+
+  }
+);
+
+/*
+ * =========================================================
+ * BOOKING
+ * =========================================================
+ */
+
+app.get(
+  "/booking/:code",
+  async (req, res) => {
+
+    const code =
+      text(
+        req.params.code
+      )
+      .trim()
+      .toUpperCase();
+
+    if (
+      !/^[A-Z0-9]{4,20}$/.test(
+        code
+      )
+    ) {
+
+      return res.status(400).json({
+
+        error:
+          "Invalid SportyBet booking code."
+
+      });
+
+    }
+
+    const url =
+      `${SPORTYBET_BASE}` +
+      `/api/ng/orders/share/` +
+      `${encodeURIComponent(code)}`;
 
     try {
-      data = JSON.parse(raw);
-    } catch {
-      return res.status(502).json({
-        error: "SportyBet returned a non-JSON response."
+
+      const response =
+        await fetch(
+          url,
+          {
+            method: "GET",
+            headers: SPORTYBET_HEADERS
+          }
+        );
+
+      const raw =
+        await response.text();
+
+      if (!response.ok) {
+
+        return res.status(502).json({
+
+          error:
+            `SportyBet returned HTTP ${response.status}.`
+
+        });
+
+      }
+
+      let data;
+
+      try {
+
+        data =
+          JSON.parse(raw);
+
+      } catch {
+
+        return res.status(502).json({
+
+          error:
+            "SportyBet returned a non-JSON response."
+
+        });
+
+      }
+
+      const booking =
+        data?.data;
+
+      if (!booking) {
+
+        return res.status(404).json({
+
+          error:
+            "No booking data was returned."
+
+        });
+
+      }
+
+      const outcomes =
+        Array.isArray(
+          booking.outcomes
+        )
+          ? booking.outcomes
+          : [];
+
+      const selections =
+        outcomes.map(
+          item => ({
+
+            event:
+              item.homeTeamName &&
+              item.awayTeamName
+
+                ? `${item.homeTeamName} vs ${item.awayTeamName}`
+
+                : item.eventName ||
+                  "Unknown match",
+
+            market:
+              item.marketDesc ||
+              item.marketName ||
+              "Unknown market",
+
+            pick:
+              item.selectedOutcome ||
+              item.selectedOutcomeName ||
+              item.outcomeName ||
+              item.outcome ||
+              "Unknown pick",
+
+            odds:
+              item.odds !== undefined
+                ? Number(item.odds)
+                : null
+
+          })
+        );
+
+      return res.json({
+
+        shareCode:
+          booking.shareCode ||
+          code,
+
+        shareURL:
+          booking.shareURL ||
+          null,
+
+        deadline:
+          booking.deadline ||
+          null,
+
+        selections
+
       });
+
+    } catch (error) {
+
+      console.error(
+        "Booking error:",
+        error
+      );
+
+      return res.status(500).json({
+
+        error:
+          "Unable to connect to SportyBet."
+
+      });
+
     }
 
-    const booking = data?.data;
+  }
+);
 
-    if (!booking) {
-      return res.status(404).json({
-        error: "No booking data was returned."
+/*
+ * =========================================================
+ * EVENT MARKETS
+ * =========================================================
+ */
+
+app.get(
+  "/event-markets/:eventId",
+  async (req, res) => {
+
+    const eventId =
+      text(
+        req.params.eventId
+      ).trim();
+
+    if (
+      !eventId
+    ) {
+
+      return res.status(400).json({
+
+        error:
+          "Event ID is required."
+
       });
+
     }
 
-    const outcomes = Array.isArray(booking.outcomes)
-      ? booking.outcomes
-      : [];
+    try {
 
-    const selections = outcomes.map((item) => ({
-      event:
-        item.homeTeamName && item.awayTeamName
-          ? `${item.homeTeamName} vs ${item.awayTeamName}`
-          : item.eventName || "Unknown match",
+      const url =
+        `${SPORTYBET_BASE}` +
+        `/api/ng/factsCenter/eventMarkets` +
+        `?eventId=${encodeURIComponent(eventId)}`;
 
-      market:
-        item.marketDesc ||
-        item.marketName ||
-        "Unknown market",
+      const response =
+        await fetch(
+          url,
+          {
+            method: "GET",
+            headers: SPORTYBET_HEADERS
+          }
+        );
 
-      pick:
-        item.selectedOutcome ||
-        item.selectedOutcomeName ||
-        item.outcomeName ||
-        item.outcome ||
-        "Unknown pick",
+      const raw =
+        await response.text();
 
-      odds:
-        item.odds !== undefined
-          ? Number(item.odds)
-          : null
-    }));
+      if (!response.ok) {
+
+        return res.status(502).json({
+
+          error:
+            `SportyBet returned HTTP ${response.status}.`
+
+        });
+
+      }
+
+      let data;
+
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        return res.status(502).json({
+          error:
+            "SportyBet returned invalid JSON."
+        });
+      }
+
+      return res.json(data);
+
+    } catch (error) {
+
+      console.error(
+        "Event markets error:",
+        error
+      );
+
+      return res.status(500).json({
+
+        error:
+          "Unable to fetch event markets."
+
+      });
+
+    }
+
+  }
+);
+
+/*
+ * =========================================================
+ * MULTI-EVENT MARKET LOOKUP
+ * =========================================================
+ */
+
+app.get(
+  "/event-markets",
+  async (req, res) => {
+
+    const eventIds =
+      text(
+        req.query.eventIds
+      )
+      .split(",")
+      .map(x => x.trim())
+      .filter(Boolean);
+
+    if (
+      !eventIds.length
+    ) {
+
+      return res.status(400).json({
+
+        error:
+          "Please provide valid event IDs."
+
+      });
+
+    }
+
+    const results = [];
+
+    for (
+      const eventId of eventIds
+    ) {
+
+      try {
+
+        const url =
+          `${SPORTYBET_BASE}` +
+          `/api/ng/factsCenter/eventMarkets` +
+          `?eventId=${encodeURIComponent(eventId)}`;
+
+        const response =
+          await fetch(
+            url,
+            {
+              method: "GET",
+              headers: SPORTYBET_HEADERS
+            }
+          );
+
+        const raw =
+          await response.text();
+
+        let data = null;
+
+        try {
+          data = JSON.parse(raw);
+        } catch {}
+
+        results.push({
+
+          eventId,
+
+          success:
+            response.ok,
+
+          data
+
+        });
+
+      } catch (error) {
+
+        results.push({
+
+          eventId,
+
+          success: false,
+
+          error:
+            error.message
+
+        });
+
+      }
+
+    }
 
     return res.json({
-      shareCode:
-        booking.shareCode || code,
 
-      shareURL:
-        booking.shareURL || null,
+      success: true,
 
-      deadline:
-        booking.deadline || null,
+      count:
+        results.length,
 
-      selections
+      results
+
     });
 
-  } catch (error) {
-    console.error(error);
-
-    return res.status(500).json({
-      error: "Unable to connect to SportyBet."
-    });
   }
-});
+);
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(
-    `SportyBet API running on port ${PORT}`
-  );
-});
+/*
+ * =========================================================
+ * AVAILABLE MARKETS
+ * =========================================================
+ */
+
+app.get(
+  "/available-markets",
+  async (req, res) => {
+
+    try {
+
+      const data =
+        await fetchUpcomingEventsPage(
+          1,
+          false
+        );
+
+      const tournaments =
+        getTournaments(data);
+
+      const markets = [];
+
+      for (
+        const tournament
+        of tournaments
+      ) {
+
+        const events =
+          Array.isArray(
+            tournament?.events
+          )
+            ? tournament.events
+            : [];
+
+        for (
+          const event of events
+        ) {
+
+          const cleaned =
+            cleanEventMarkets({
+              event,
+              tournament
+            });
+
+          if (!cleaned) {
+            continue;
+          }
+
+          for (
+            const market
+            of cleaned.markets
+          ) {
+
+            markets.push({
+
+              eventId:
+                cleaned.event.eventId,
+
+              match:
+                `${cleaned.event.homeTeamName} vs ${cleaned.event.awayTeamName}`,
+
+              competition:
+                cleaned.event.competition,
+
+              marketId:
+                market.marketId,
+
+              market:
+                market.market
+
+            });
+
+          }
+
+        }
+
+      }
+
+      return res.json({
+
+        success: true,
+
+        count:
+          markets.length,
+
+        markets
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Available markets error:",
+        error
+      );
+
+      return res.status(500).json({
+
+        success: false,
+
+        error:
+          error.message ||
+          "Unable to fetch markets."
+
+      });
+
+    }
+
+  }
+);
+
+/*
+ * =========================================================
+ * SELECTION ENGINE
+ * ========================================================= */
+
+app.get(
+  "/selection-engine",
+  async (req, res) => {
+
+    try {
+
+      const target =
+        Number(
+          req.query.target || 100
+        );
+
+      if (
+        !Number.isFinite(target) ||
+        target <= 1
+      ) {
+
+        return res.status(400).json({
+
+          success: false,
+
+          error:
+            "Target odds must be greater than 1."
+
+        });
+
+      }
+
+      const requestedStrategy =
+        text(
+          req.query.strategy ||
+          "balanced"
+        )
+        .trim()
+        .toLowerCase();
+
+      const validStrategies = [
+        "conservative",
+        "balanced",
+        "aggressive",
+        "custom"
+      ];
+
+      if (
+        !validStrategies.includes(
+          requestedStrategy
+        )
+      ) {
+
+        return res.status(400).json({
+
+          success: false,
+
+          error:
+            "Invalid strategy. Use conservative, balanced, aggressive, or custom."
+
+        });
+
+      }
+
+      let strategy =
+        requestedStrategy;
+
+      let strategyConfig;
+
+      if (
+        strategy === "conservative"
+      ) {
+
+        strategyConfig = {
+
+          minOdds: 1.01,
+
+          maxOdds: 1.20,
+
+          minProbability: 0.55,
+
+          minStrength: 60,
+
+          maxSelections: 50
+
+        };
+
+      } else if (
+        strategy === "balanced"
+      ) {
+
+        strategyConfig = {
+
+          minOdds: 1.15,
+
+          maxOdds: 3.50,
+
+          minProbability: 0.55,
+
+          minStrength: 60,
+
+          maxSelections: 15
+
+        };
+
+      } else if (
+        strategy === "aggressive"
+      ) {
+
+        strategyConfig = {
+
+          minOdds: 1.50,
+
+          maxOdds: 5.00,
+
+          minProbability: 0.45,
+
+          minStrength: 45,
+
+          maxSelections: 15
+
+        };
+
+      } else {
+
+        const customMin =
+          Number(
+            req.query.minOdds ||
+            1.01
+          );
+
+        const customMax =
+          Number(
+            req.query.maxOdds ||
+            3.50
+          );
+
+        const customMaxSelections =
+          Number(
+            req.query.maxSelections ||
+            30
+          );
+
+        if (
+          !Number.isFinite(customMin) ||
+          !Number.isFinite(customMax) ||
+          !Number.isFinite(customMaxSelections) ||
+          customMin < 1.01 ||
+          customMax <= customMin ||
+          customMaxSelections < 1
+        ) {
+
+          return res.status(400).json({
+
+            success: false,
+
+            error:
+              "Invalid custom strategy parameters."
+
+          });
+
+        }
+
+        strategyConfig = {
+
+          minOdds:
+            customMin,
+
+          maxOdds:
+            customMax,
+
+          minProbability:
+            0.55,
+
+          minStrength:
+            60,
+
+          maxSelections:
+            Math.floor(
+              customMaxSelections
+            )
+
+        };
+
+      }
+
+      /*
+       * NEW:
+       * Allow V2 to request the
+       * complete filtered candidate pool.
+       */
+
+      const includeCandidates =
+        text(
+          req.query.includeCandidates ||
+          ""
+        )
+        .toLowerCase() === "true";
+
+      const cacheKey = [
+
+        target,
+
+        strategy,
+
+        strategyConfig.minOdds,
+
+        strategyConfig.maxOdds,
+
+        strategyConfig.maxSelections,
+
+        includeCandidates
+
+      ].join(":");
+
+      const cached =
+        selectionCache.get(
+          cacheKey
+        );
+
+      if (
+        cached &&
+        Date.now() -
+          cached.timestamp <
+          SELECTION_CACHE_TTL_MS
+      ) {
+
+        return res.json({
+
+          ...cached.data,
+
+          cached: true
+
+        });
+
+      }
+
+      /*
+       * Fetch multiple pages.
+       */
+
+      const pageNumbers =
+        Array.from(
+          {
+            length:
+              MAX_EVENT_SEARCH_PAGES
+          },
+          (_, index) =>
+            index + 1
+        );
+
+      const pageData =
+        await Promise.all(
+
+          pageNumbers.map(
+            pageNum =>
+              fetchUpcomingEventsPage(
+                pageNum,
+                false
+              ).catch(
+                error => {
+
+                  console.error(
+                    `Selection page ${pageNum} failed:`,
+                    error.message
+                  );
+
+                  return null;
+
+                }
+              )
+          )
+
+        );
+
+      const pageResults = [];
+
+      for (
+        const data of pageData
+      ) {
+
+        if (!data) {
+          continue;
+        }
+
+        const tournaments =
+          getTournaments(data);
+
+        for (
+          const tournament
+          of tournaments
+        ) {
+
+          const competition =
+            text(
+              tournament?.name ||
+              tournament?.tournamentName ||
+              ""
+            );
+
+          if (
+            !isAllowedCompetition(
+              competition
+            )
+          ) {
+            continue;
+          }
+
+          const events =
+            Array.isArray(
+              tournament?.events
+            )
+              ? tournament.events
+              : [];
+
+          for (
+            const event
+            of events
+          ) {
+
+            const cleaned =
+              cleanEventMarkets({
+                event,
+                tournament
+              });
+
+            if (cleaned) {
+
+              pageResults.push(
+                cleaned
+              );
+
+            }
+
+          }
+
+        }
+
+      }
+
+      console.log(
+        "Selection engine events:",
+        pageResults.length
+      );
+
+      const engine =
+        runSelectionEngine(
+          pageResults,
+          target,
+          {
+
+            strategy,
+
+            minOdds:
+              strategyConfig.minOdds,
+
+            maxOdds:
+              strategyConfig.maxOdds,
+
+            minProbability:
+              strategyConfig.minProbability,
+
+            minStrength:
+              strategyConfig.minStrength,
+
+            maxSelections:
+              strategyConfig.maxSelections,
+
+            tolerance: 0.20,
+
+            includeCandidates
+
+          }
+        );
+
+      const response = {
+
+        success:
+          engine.success,
+
+        generatedAt:
+          new Date().toISOString(),
+
+        strategy,
+
+        strategyConfig: {
+
+          minOdds:
+            strategyConfig.minOdds,
+
+          maxOdds:
+            strategyConfig.maxOdds,
+
+          maxSelections:
+            strategyConfig.maxSelections
+
+        },
+
+        competitions:
+          ALLOWED_COMPETITIONS,
+
+        targetOdds:
+          target,
+
+        ...engine
+
+      };
+
+      selectionCache.set(
+
+        cacheKey,
+
+        {
+
+          timestamp:
+            Date.now(),
+
+          data:
+            response
+
+        }
+
+      );
+
+      return res.json({
+
+        ...response,
+
+        cached: false
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Selection engine error:",
+        error
+      );
+
+      return res.status(500).json({
+
+        success: false,
+
+        error:
+          error.message ||
+          "Selection engine failed."
+
+      });
+
+    }
+
+  }
+);
+
+/*
+ * =========================================================
+ * CREATE BOOKING
+ * =========================================================
+ */
+
+app.post(
+  "/create-booking",
+  async (req, res) => {
+
+    try {
+
+      const selections =
+        Array.isArray(
+          req.body?.selections
+        )
+          ? req.body.selections
+          : [];
+
+      if (
+        !selections.length
+      ) {
+
+        return res.status(400).json({
+
+          success: false,
+
+          error:
+            "Selections are required."
+
+        });
+
+      }
+
+      /*
+       * SportyBet booking creation
+       * can vary by account/session.
+       *
+       * Return the normalized selections
+       * rather than pretending a booking
+       * was successfully created.
+       */
+
+      return res.json({
+
+        success: false,
+
+        error:
+          "Booking creation requires a valid SportyBet booking session."
+
+      });
+
+    } catch (error) {
+
+      return res.status(500).json({
+
+        success: false,
+
+        error:
+          error.message
+
+      });
+
+    }
+
+  }
+);
+
+/*
+ * =========================================================
+ * START SERVER
+ * =========================================================
+ */
+
+app.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
+
+    console.log(
+      `SportyBet API running on port ${PORT}`
+    );
+
+  }
+);
