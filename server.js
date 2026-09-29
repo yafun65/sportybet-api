@@ -457,7 +457,10 @@ app.get(
 
       const booking =
         data?.data;
-
+console.log(
+  "RAW SPORTYBET BOOKING:",
+  JSON.stringify(booking, null, 2)
+);
       if (!booking) {
         return res.status(404).json({
           error:
