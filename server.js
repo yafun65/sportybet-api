@@ -400,7 +400,71 @@ app.get(
  * BOOKING
  * =========================================================
  */
+app.get(
+  "/debug-booking/:code",
+  async (req, res) => {
+    const code =
+      text(req.params.code)
+        .trim()
+        .toUpperCase();
 
+    if (
+      !/^[A-Z0-9]{4,20}$/.test(code)
+    ) {
+      return res.status(400).json({
+        error:
+          "Invalid SportyBet booking code."
+      });
+    }
+
+    const url =
+      `${SPORTYBET_BASE}` +
+      `/api/ng/orders/share/` +
+      `${encodeURIComponent(code)}`;
+
+    try {
+      const response =
+        await fetch(
+          url,
+          {
+            method: "GET",
+            headers: SPORTYBET_HEADERS
+          }
+        );
+
+      const raw =
+        await response.text();
+
+      let data;
+
+      try {
+        data =
+          JSON.parse(raw);
+      } catch {
+        return res.status(502).json({
+          error:
+            "SportyBet returned non-JSON.",
+          raw:
+            raw.slice(0, 10000)
+        });
+      }
+
+      return res.json({
+        httpStatus:
+          response.status,
+
+        rawSportyBetData:
+          data
+      });
+
+    } catch (error) {
+      return res.status(500).json({
+        error:
+          error.message
+      });
+    }
+  }
+);
 app.get(
   "/booking/:code",
   async (req, res) => {
