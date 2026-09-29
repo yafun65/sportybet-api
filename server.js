@@ -1184,33 +1184,143 @@ app.post(
   async (req, res) => {
     try {
       const selections =
-        Array.isArray(
-          req.body?.selections
-        )
+        Array.isArray(req.body?.selections)
           ? req.body.selections
           : [];
 
-      if (
-        !selections.length
-      ) {
+      if (!selections.length) {
+        return res.status(400).json({
+          success: false,
+          error: "Selections are required."
+        });
+      }
+
+      // Validate required SportyBet fields
+      const invalidSelection =
+        selections.find(
+          item =>
+            !item?.eventId ||
+            !item?.marketId ||
+            !item?.outcomeId
+        );
+
+      if (invalidSelection) {
         return res.status(400).json({
           success: false,
           error:
-            "Selections are required."
+            "Each selection requires eventId, marketId and outcomeId."
+        });
+      }
+
+      const bookingSelections =
+        selections.map(item => ({
+          eventId: String(item.eventId),
+          marketId: String(item.marketId),
+          specifier:
+            item.specifier !== undefined &&
+            item.specifier !== null
+              ? String(item.specifier)
+              : null,
+          outcomeId: String(item.outcomeId)
+        }));
+
+      const url =
+        `${SPORTYBET_BASE}` +
+        `/api/ng/orders/share`;
+
+      const headers = {
+        ...SPORTYBET_HEADERS,
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Current-Country": "NG"
+      };
+
+      const response =
+        await fetch(
+          url,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              selections:
+                bookingSelections
+            })
+          }
+        );
+
+      const raw =
+        await response.text();
+
+      let data;
+
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        return res.status(502).json({
+          success: false,
+          error:
+            "SportyBet returned a non-JSON response.",
+          httpStatus:
+            response.status
+        });
+      }
+
+      if (!response.ok) {
+        return res.status(502).json({
+          success: false,
+          error:
+            `SportyBet returned HTTP ${response.status}.`,
+          sportBetResponse:
+            data
+        });
+      }
+
+      const booking =
+        data?.data;
+
+      if (
+        !booking ||
+        !booking.shareCode
+      ) {
+        return res.status(502).json({
+          success: false,
+          error:
+            "SportyBet did not return a booking code.",
+          sportBetResponse:
+            data
         });
       }
 
       return res.json({
-        success: false,
-        error:
-          "Booking creation requires a valid SportyBet booking session."
+        success: true,
+
+        shareCode:
+          booking.shareCode,
+
+        shareURL:
+          booking.shareURL ||
+          null,
+
+        deadline:
+          booking.deadline ||
+          null,
+
+        unavailableOutcomes:
+          booking.unavailableOutcomes ||
+          []
       });
 
     } catch (error) {
+      console.error(
+        "Create booking error:",
+        error
+      );
+
       return res.status(500).json({
         success: false,
         error:
-          error.message
+          error.message ||
+          "Unable to create SportyBet booking."
       });
     }
   }
