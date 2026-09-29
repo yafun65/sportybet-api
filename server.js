@@ -400,72 +400,7 @@ app.get(
  * BOOKING
  * =========================================================
  */
-app.get(
-  "/debug-booking/:code",
-  async (req, res) => {
-    const code =
-      text(req.params.code)
-        .trim()
-        .toUpperCase();
-
-    if (
-      !/^[A-Z0-9]{4,20}$/.test(code)
-    ) {
-      return res.status(400).json({
-        error:
-          "Invalid SportyBet booking code."
-      });
-    }
-
-    const url =
-      `${SPORTYBET_BASE}` +
-      `/api/ng/orders/share/` +
-      `${encodeURIComponent(code)}`;
-
-    try {
-      const response =
-        await fetch(
-          url,
-          {
-            method: "GET",
-            headers: SPORTYBET_HEADERS
-          }
-        );
-
-      const raw =
-        await response.text();
-
-      let data;
-
-      try {
-        data =
-          JSON.parse(raw);
-      } catch {
-        return res.status(502).json({
-          error:
-            "SportyBet returned non-JSON.",
-          raw:
-            raw.slice(0, 10000)
-        });
-      }
-
-      return res.json({
-        httpStatus:
-          response.status,
-
-        rawSportyBetData:
-          data
-      });
-
-    } catch (error) {
-      return res.status(500).json({
-        error:
-          error.message
-      });
-    }
-  }
-);
-app.get(
+  app.get(
   "/booking/:code",
   async (req, res) => {
     const code =
@@ -521,10 +456,7 @@ app.get(
 
       const booking =
         data?.data;
-console.log(
-  "RAW SPORTYBET BOOKING:",
-  JSON.stringify(booking, null, 2)
-);
+
       if (!booking) {
         return res.status(404).json({
           error:
@@ -539,34 +471,60 @@ console.log(
           ? booking.outcomes
           : [];
 
-      const selections =
-        outcomes.map(
-          item => ({
-            event:
-              item.homeTeamName &&
-              item.awayTeamName
-                ? `${item.homeTeamName} vs ${item.awayTeamName}`
-                : item.eventName ||
-                  "Unknown match",
+      const selections = [];
 
-            market:
-              item.marketDesc ||
-              item.marketName ||
-              "Unknown market",
+      for (const item of outcomes) {
+        const eventName =
+          item.homeTeamName &&
+          item.awayTeamName
+            ? `${item.homeTeamName} vs ${item.awayTeamName}`
+            : "Unknown match";
 
-            pick:
-              item.selectedOutcome ||
-              item.selectedOutcomeName ||
-              item.outcomeName ||
-              item.outcome ||
-              "Unknown pick",
+        const markets =
+          Array.isArray(item.markets)
+            ? item.markets
+            : [];
 
-            odds:
-              item.odds !== undefined
-                ? Number(item.odds)
-                : null
-          })
-        );
+        for (const market of markets) {
+          const marketOutcomes =
+            Array.isArray(market.outcomes)
+              ? market.outcomes
+              : [];
+
+          for (const outcome of marketOutcomes) {
+            selections.push({
+              eventId:
+                item.eventId || null,
+
+              event:
+                eventName,
+
+              marketId:
+                market.id || null,
+
+              market:
+                market.desc ||
+                "Unknown market",
+
+              specifier:
+                market.specifier ??
+                null,
+
+              outcomeId:
+                outcome.id || null,
+
+              pick:
+                outcome.desc ||
+                "Unknown pick",
+
+              odds:
+                outcome.odds !== undefined
+                  ? Number(outcome.odds)
+                  : null
+            });
+          }
+        }
+      }
 
       return res.json({
         shareCode:
@@ -597,80 +555,6 @@ console.log(
     }
   }
 );
-
-/*
- * =========================================================
- * EVENT MARKETS
- * =========================================================
- */
-
-app.get(
-  "/event-markets/:eventId",
-  async (req, res) => {
-    const eventId =
-      text(req.params.eventId)
-        .trim();
-
-    if (!eventId) {
-      return res.status(400).json({
-        error:
-          "Event ID is required."
-      });
-    }
-
-    try {
-      const url =
-        `${SPORTYBET_BASE}` +
-        `/api/ng/factsCenter/eventMarkets` +
-        `?eventId=${encodeURIComponent(eventId)}`;
-
-      const response =
-        await fetch(
-          url,
-          {
-            method: "GET",
-            headers: SPORTYBET_HEADERS
-          }
-        );
-
-      const raw =
-        await response.text();
-
-      if (!response.ok) {
-        return res.status(502).json({
-          error:
-            `SportyBet returned HTTP ${response.status}.`
-        });
-      }
-
-      let data;
-
-      try {
-        data =
-          JSON.parse(raw);
-      } catch {
-        return res.status(502).json({
-          error:
-            "SportyBet returned invalid JSON."
-        });
-      }
-
-      return res.json(data);
-
-    } catch (error) {
-      console.error(
-        "Event markets error:",
-        error
-      );
-
-      return res.status(500).json({
-        error:
-          "Unable to fetch event markets."
-      });
-    }
-  }
-);
-
 /*
  * =========================================================
  * MULTI-EVENT MARKET LOOKUP
